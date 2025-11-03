@@ -299,8 +299,9 @@ export default function App() {
         Transport.cancel(0);
         transportPart.current?.dispose();
         countdownPart.current?.dispose();
-        // FIX: Provide the current audio context time to triggerRelease and releaseAll.
-        // Some versions of Tone.js can throw an error if no argument is provided.
+        // FIX: The `triggerRelease` and `releaseAll` methods were being called without a
+        // required time argument, causing an "Expected 1 arguments, but got 0" error.
+        // Passing Tone.js's `context.currentTime` ensures the release is scheduled correctly.
         synths.bass?.triggerRelease(context.currentTime);
         synths.chord?.releaseAll(context.currentTime);
         setPlayerState(PlayerState.Stopped);
