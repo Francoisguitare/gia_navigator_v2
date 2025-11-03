@@ -302,9 +302,7 @@ export default function App() {
         // FIX: The `triggerRelease` and `releaseAll` methods for Tone.js synths
         // were being called without a required time argument. Passing `context.currentTime`
         // ensures the release is scheduled correctly and immediately.
-        // FIX: Added `context.currentTime` to fix "Expected 1 arguments, but got 0" error.
         synths.bass?.triggerRelease(context.currentTime);
-        // FIX: Added `context.currentTime` to fix "Expected 1 arguments, but got 0" error.
         synths.chord?.releaseAll(context.currentTime);
         setPlayerState(PlayerState.Stopped);
         setCurrentBeat(-1);
