@@ -221,18 +221,16 @@ export default function App() {
     }, [chords, triggerAnalysis]);
 
     useEffect(() => {
-        // FIX: Refactored synth initialization to be more robust.
-        // Passing options directly to constructors can be problematic with certain versions of Tone.js.
-        // This pattern of using a parameter-less constructor and then .set() is safer.
+        // Standardize synth initialization to prevent runtime errors.
+        // This pattern of using a parameter-less constructor and then .set() is the most robust.
         synths.bass = new MonoSynth().toDestination();
         synths.bass.set({ oscillator: { type: 'fatsawtooth' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.5 } });
         
-        // FIX: Correctly initialize PolySynth by passing the voice in the constructor
-        // and setting the voice options with .set().
         synths.chord = new PolySynth(Synth).toDestination();
         synths.chord.set({ oscillator: { type: "fatsawtooth", count: 3, spread: 30 }, envelope: { attack: 0.4, decay: 0.1, sustain: 0.8, release: 1.5 } });
 
-        synths.metro = new MembraneSynth({ pitchDecay: 0.01, octaves: 4, oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.1, sustain: 0.01, release: 0.1 } }).toDestination();
+        synths.metro = new MembraneSynth().toDestination();
+        synths.metro.set({ pitchDecay: 0.01, octaves: 4, oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.1, sustain: 0.01, release: 0.1 } });
         
         return () => {
             synths.bass?.dispose();
@@ -301,8 +299,10 @@ export default function App() {
         Transport.cancel(0);
         transportPart.current?.dispose();
         countdownPart.current?.dispose();
-        synths.bass?.triggerRelease();
-        synths.chord?.releaseAll();
+        // FIX: Provide the current audio context time to triggerRelease and releaseAll.
+        // Some versions of Tone.js can throw an error if no argument is provided.
+        synths.bass?.triggerRelease(context.currentTime);
+        synths.chord?.releaseAll(context.currentTime);
         setPlayerState(PlayerState.Stopped);
         setCurrentBeat(-1);
     }, [synths]);
