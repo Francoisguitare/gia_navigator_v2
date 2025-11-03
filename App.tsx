@@ -221,15 +221,15 @@ export default function App() {
     }, [chords, triggerAnalysis]);
 
     useEffect(() => {
-        // FIX: The chained `.toDestination()` call can cause type inference issues with some
-        // versions of Tone.js and its TypeScript typings. Splitting the creation and
-        // connection to destination resolves this. Also, updated PolySynth to use the
-        // modern options-object constructor for better compatibility.
         synths.bass = new Tone.MonoSynth({ oscillator: { type: 'fatsawtooth' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.5 } });
         synths.bass.toDestination();
-        synths.chord = new Tone.PolySynth({ oscillator: { type: "fatsawtooth", count: 3, spread: 30 }, envelope: { attack: 0.4, decay: 0.1, sustain: 0.8, release: 1.5 } });
+        // FIX: The Tone.js PolySynth constructor signature is stricter for voice options.
+        // We now explicitly pass Tone.Synth as the voice and the oscillator/envelope configuration
+        // as the second argument, which contains the options for each voice instance.
+        synths.chord = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "fatsawtooth", count: 3, spread: 30 }, envelope: { attack: 0.4, decay: 0.1, sustain: 0.8, release: 1.5 } });
         synths.chord.toDestination();
-        synths.metro = new Tone.MembraneSynth({ pitchDecay: 0.01, octaves: 4, oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.1, sustain: 0.01, release: 0.1 } }).toDestination();
+        synths.metro = new Tone.MembraneSynth({ pitchDecay: 0.01, octaves: 4, oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.1, sustain: 0.01, release: 0.1 } });
+        synths.metro.toDestination();
         
         return () => {
             synths.bass?.dispose();
