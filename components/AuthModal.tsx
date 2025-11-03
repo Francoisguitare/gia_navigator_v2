@@ -1,7 +1,8 @@
+
 import React, { useState, useEffect } from 'react';
-import { auth, db } from '../services/firebase';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, AuthError } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
+import { auth, db } from '../services/firebase';
 import { LoadingSpinner, XIcon } from './icons';
 
 interface AuthModalProps {
@@ -54,7 +55,7 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
       } else {
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         // Create user document in Firestore
-        await setDoc(doc(db, 'users', userCredential.user.uid), {
+        await setDoc(doc(db, "users", userCredential.user.uid), {
             xp: 0,
             level: 1,
             timePlayed: 0
