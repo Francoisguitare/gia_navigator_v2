@@ -3,14 +3,14 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { MonoSynth, PolySynth, Synth, MembraneSynth, Part, Transport, Draw, context, start } from 'tone';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { auth, db } from './services/firebase';
+import { auth, db } from './services/firebase.ts';
 
-import { FullAnalysis, ChordAnalysis, TargetNote, GamificationData, PlayerState } from './types';
-import { TOTAL_CELLS, GAMIFICATION_XP_PER_LEVEL, GAMIFICATION_XP_PER_SECOND, PRESET_PROGRESSIONS } from './constants';
-import { analyzeProgressionWithGemini } from './services/geminiService';
-import GuitarNeck from './components/GuitarNeck';
-import AuthModal from './components/AuthModal';
-import { PlayIcon, StopIcon, LoadingSpinner, TrophyIcon, ClockIcon, UserIcon } from './components/icons';
+import { FullAnalysis, ChordAnalysis, TargetNote, GamificationData, PlayerState } from './types.ts';
+import { TOTAL_CELLS, GAMIFICATION_XP_PER_LEVEL, GAMIFICATION_XP_PER_SECOND, PRESET_PROGRESSIONS } from './constants.ts';
+import { analyzeProgressionWithGemini } from './services/geminiService.ts';
+import GuitarNeck from './components/GuitarNeck.tsx';
+import AuthModal from './components/AuthModal.tsx';
+import { PlayIcon, StopIcon, LoadingSpinner, TrophyIcon, ClockIcon, UserIcon } from './components/icons.tsx';
 
 const CircleProgress: React.FC<{ progress: number; size: number; strokeWidth: number; level: number }> = ({ progress, size, strokeWidth, level }) => {
     const center = size / 2;
@@ -299,9 +299,9 @@ export default function App() {
         Transport.cancel(0);
         transportPart.current?.dispose();
         countdownPart.current?.dispose();
-        // FIX: The `triggerRelease` and `releaseAll` methods for Tone.js synths
-        // were being called without a required time argument. Passing `context.currentTime`
-        // ensures the release is scheduled correctly and immediately.
+        // Fix: The `triggerRelease` and `releaseAll` methods for Tone.js synths
+        // must be called with a time argument to ensure they execute immediately.
+        // Passing `context.currentTime` schedules the release for the current audio context time.
         synths.bass?.triggerRelease(context.currentTime);
         synths.chord?.releaseAll(context.currentTime);
         setPlayerState(PlayerState.Stopped);
