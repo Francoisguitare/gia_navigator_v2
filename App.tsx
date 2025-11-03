@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import * as Tone from 'tone';
+import { MonoSynth, PolySynth, Synth, MembraneSynth, Part, Transport, Draw, context, start } from 'tone';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from './services/firebase';
@@ -139,9 +139,9 @@ export default function App() {
     const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
-    const synths = useRef<{ bass?: Tone.MonoSynth, chord?: Tone.PolySynth, metro?: Tone.MembraneSynth }>({}).current;
-    const transportPart = useRef<Tone.Part | null>(null);
-    const countdownPart = useRef<Tone.Part | null>(null);
+    const synths = useRef<{ bass?: MonoSynth, chord?: PolySynth, metro?: MembraneSynth }>({}).current;
+    const transportPart = useRef<Part | null>(null);
+    const countdownPart = useRef<Part | null>(null);
     const debouncedAnalysis = useRef<ReturnType<typeof setTimeout>>();
     const debouncedSave = useRef<ReturnType<typeof setTimeout>>();
 
@@ -221,26 +221,29 @@ export default function App() {
     }, [chords, triggerAnalysis]);
 
     useEffect(() => {
-        synths.bass = new Tone.MonoSynth({ oscillator: { type: 'fatsawtooth' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.5 } });
-        synths.bass.toDestination();
-        // FIX: The Tone.js PolySynth constructor signature is stricter for voice options.
-        // We now explicitly pass Tone.Synth as the voice and the oscillator/envelope configuration
-        // as the second argument, which contains the options for each voice instance.
-        synths.chord = new Tone.PolySynth(Tone.Synth, { oscillator: { type: "fatsawtooth", count: 3, spread: 30 }, envelope: { attack: 0.4, decay: 0.1, sustain: 0.8, release: 1.5 } });
-        synths.chord.toDestination();
-        synths.metro = new Tone.MembraneSynth({ pitchDecay: 0.01, octaves: 4, oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.1, sustain: 0.01, release: 0.1 } });
-        synths.metro.toDestination();
+        // FIX: Refactored synth initialization to be more robust.
+        // Passing options directly to constructors can be problematic with certain versions of Tone.js.
+        // This pattern of using a parameter-less constructor and then .set() is safer.
+        synths.bass = new MonoSynth().toDestination();
+        synths.bass.set({ oscillator: { type: 'fatsawtooth' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.5 } });
+        
+        // FIX: Correctly initialize PolySynth by passing the voice in the constructor
+        // and setting the voice options with .set().
+        synths.chord = new PolySynth(Synth).toDestination();
+        synths.chord.set({ oscillator: { type: "fatsawtooth", count: 3, spread: 30 }, envelope: { attack: 0.4, decay: 0.1, sustain: 0.8, release: 1.5 } });
+
+        synths.metro = new MembraneSynth({ pitchDecay: 0.01, octaves: 4, oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.1, sustain: 0.01, release: 0.1 } }).toDestination();
         
         return () => {
             synths.bass?.dispose();
             synths.chord?.dispose();
             synths.metro?.dispose();
-            Tone.Transport.cancel(0);
+            Transport.cancel(0);
         };
     }, []);
 
     useEffect(() => {
-        Tone.Transport.bpm.value = tempo;
+        Transport.bpm.value = tempo;
         if(synths.metro) synths.metro.volume.value = volumes.metro;
         if(synths.bass) synths.bass.volume.value = volumes.bass;
         if(synths.chord) synths.chord.volume.value = volumes.chord;
@@ -294,8 +297,8 @@ export default function App() {
     }, [analysis, chords]);
 
     const stopPlayback = useCallback(() => {
-        Tone.Transport.stop();
-        Tone.Transport.cancel(0);
+        Transport.stop();
+        Transport.cancel(0);
         transportPart.current?.dispose();
         countdownPart.current?.dispose();
         synths.bass?.triggerRelease();
@@ -350,9 +353,9 @@ export default function App() {
             }
         }
         
-        transportPart.current = new Tone.Part((time, value) => {
+        transportPart.current = new Part((time, value) => {
             if (value.type === 'highlight') {
-                Tone.Draw.schedule(() => setCurrentBeat(value.beat), time);
+                Draw.schedule(() => setCurrentBeat(value.beat), time);
             } else if (value.type === 'metro' && synths.metro) {
                 synths.metro.triggerAttackRelease(value.note, '16n', time);
             } else if (value.type === 'bass' && synths.bass) {
@@ -364,26 +367,26 @@ export default function App() {
         transportPart.current.loop = true;
         transportPart.current.loopEnd = `${loopEndMeasures}m`;
         
-        countdownPart.current = new Tone.Part((time, value) => {
+        countdownPart.current = new Part((time, value) => {
              if (synths.metro) synths.metro.triggerAttackRelease('C5', '8n', time);
-             Tone.Draw.schedule(() => setCurrentBeat(value.beat), time);
+             Draw.schedule(() => setCurrentBeat(value.beat), time);
         }, [{time: '0:0', beat: -4}, {time: '0:1', beat: -3}, {time: '0:2', beat: -2}, {time: '0:3', beat: -1}]).start(0);
 
-        Tone.Transport.loop = true;
-        Tone.Transport.loopStart = '1m';
-        Tone.Transport.loopEnd = `${loopEndMeasures + 1}m`;
+        Transport.loop = true;
+        Transport.loopStart = '1m';
+        Transport.loopEnd = `${loopEndMeasures + 1}m`;
         
-        Tone.Transport.scheduleOnce(() => {
+        Transport.scheduleOnce(() => {
             setPlayerState(PlayerState.Playing);
         }, '1m');
 
-        Tone.Transport.start();
+        Transport.start();
         setPlayerState(PlayerState.CountingDown);
     }, [chords, synths, analysisByCell]);
 
 
     const handlePlayStop = async () => {
-        if (Tone.context.state !== 'running') await Tone.start();
+        if (context.state !== 'running') await start();
         if (playerState !== PlayerState.Stopped) {
             stopPlayback();
         } else {
