@@ -229,51 +229,20 @@ const analyzeProgressionWithGemini = async (progression) => {
     - notes: La liste des notes qui composent l'accord (ex: ["C", "E", "G"]).
     - front: Classifie l'accord comme "RÉSOLUTION" (stable), "TENSION" (dominant, veut résoudre), ou "HORS TONALITÉ" (inattendu, crée une surprise).
     - actionRythmique: Suggère une approche rythmique: "LENT / LYRIQUE" pour la résolution, "RAPIDE / AGRESSIF" pour la tension.
-    - allTargetOptions: Propose des notes cibles pour l'improvisation, en incluant des notes fondatrices (R, 3, 5, 7) et des notes expressives (9, 11, 13, altérations), avec une brève description de leur "intention" (ex: "Stabilité", "Couleur", "Tension Ultime").`;
+    - allTargetOptions: Propose des notes cibles pour l'improvisation, en incluant des notes fondatrices (R, 3, 5, 7) et des notes expressives (9, 11, 13, altérations), avec une brève description de leur "intention" (ex: "Stabilité", "Couleur", "Tension Ultime").
+    
+    Réponds avec un objet JSON valide et rien d'autre. N'ajoute pas de démarqueurs de code comme \`\`\`json.`;
 
     try {
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                 responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        tonalite: { type: Type.STRING },
-                        notesGamme: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        progressionAnalysis: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    accord: { type: Type.STRING },
-                                    degre: { type: Type.STRING },
-                                    notes: { type: Type.ARRAY, items: { type: Type.STRING } },
-                                    front: { type: Type.STRING },
-                                    actionRythmique: { type: Type.STRING },
-                                    allTargetOptions: {
-                                        type: Type.ARRAY,
-                                        items: {
-                                            type: Type.OBJECT,
-                                            properties: {
-                                                note: { type: Type.STRING },
-                                                interval: { type: Type.STRING },
-                                                intention: { type: Type.STRING },
-                                                description: { type: Type.STRING },
-                                                type: { type: Type.STRING }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            contents: prompt
         });
 
-        const jsonText = response.text.trim();
+        let jsonText = response.text.trim();
+        if (jsonText.startsWith('```json')) {
+            jsonText = jsonText.substring(7, jsonText.length - 3).trim();
+        }
         const result = JSON.parse(jsonText);
         return result;
 
@@ -427,7 +396,7 @@ const GuitarNeck = ({ highlightedNotes, scaleNotes = [] }) => {
 
 // === FROM components/AuthModal.tsx ===
 // AuthModal component
-const AuthModal = ({ isOpen, onClose }) => {
+const AuthModal = ({ isOpen, onClose, initialGamificationData }) => {
   const [activeTab, setActiveTab] = useState('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -473,11 +442,7 @@ const AuthModal = ({ isOpen, onClose }) => {
         await signInWithEmailAndPassword(auth, email, password);
       } else {
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        await setDoc(doc(db, "users", userCredential.user.uid), {
-            xp: 0,
-            level: 1,
-            timePlayed: 0
-        });
+        await setDoc(doc(db, "users", userCredential.user.uid), initialGamificationData);
       }
       onClose();
     } catch (err) {
@@ -744,6 +709,11 @@ function App() {
                 const userDoc = await getDoc(userDocRef);
                 if (userDoc.exists()) {
                     setGamificationData(userDoc.data());
+                } else {
+                    // This handles the case where a user is authenticated but doesn't have a doc yet.
+                    // This can happen if signup process was interrupted.
+                    await setDoc(doc(db, "users", user.uid), INITIAL_GAMIFICATION_DATA);
+                    setGamificationData(INITIAL_GAMIFICATION_DATA);
                 }
             } else {
                 setCurrentUser(null);
@@ -1063,6 +1033,14 @@ function App() {
         setChords(Array(TOTAL_CELLS).fill(''));
         setAnalysis(null);
     };
+    
+    const handleLogout = async () => {
+        if (currentUser) {
+            // Force-save current progress before signing out to prevent data loss.
+            await setDoc(doc(db, 'users', currentUser.uid), gamificationData, { merge: true });
+        }
+        await signOut(auth);
+    };
 
     return (
         <>
@@ -1080,7 +1058,7 @@ function App() {
                                 <>
                                     <div className="text-right">
                                         <p className="text-sm text-gray-300 truncate">{currentUser.email}</p>
-                                        <button onClick={() => signOut(auth)} className="text-xs text-red-400 hover:underline">Déconnexion</button>
+                                        <button onClick={handleLogout} className="text-xs text-red-400 hover:underline">Déconnexion</button>
                                     </div>
                                     <UserIcon className="w-8 h-8 text-gray-400"/>
                                 </>
@@ -1183,7 +1161,7 @@ function App() {
                 </div>
             </div>
             <GamificationDashboard data={gamificationData} />
-            <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
+            <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} initialGamificationData={gamificationData} />
         </>
     );
 }
