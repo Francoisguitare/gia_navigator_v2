@@ -105,11 +105,11 @@ interface GamificationData {
   timePlayed: number; // in seconds
 }
 
-enum PlayerState {
-  Stopped,
-  CountingDown,
-  Playing,
-}
+const PlayerState = {
+  Stopped: 'Stopped',
+  CountingDown: 'CountingDown',
+  Playing: 'Playing',
+};
 
 
 // === FROM constants.ts ===
