@@ -316,6 +316,14 @@ const notePositions = calculateNotePositions();
 
 const GuitarNeck = ({ highlightedNotes, scaleNotes = [] }) => {
   const neckRef = React.useRef(null);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    // By setting state after mount, we trigger a re-render.
+    // On this second render, neckRef.current will be defined, allowing
+    // clientWidth to be read correctly for SVG calculations.
+    setIsMounted(true);
+  }, []);
 
   const neckDimensions = {
     height: 140,
