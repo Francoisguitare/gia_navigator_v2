@@ -741,18 +741,29 @@ function App() {
     const debouncedAnalysis = useRef(null);
     const debouncedSave = useRef(null);
 
+    const isSavingRef = useRef(false);
+    const gamificationDataRef = useRef(gamificationData);
+
+    useEffect(() => {
+      gamificationDataRef.current = gamificationData;
+    }, [gamificationData]);
+
     const saveUserData = useCallback(async () => {
-        if (!currentUser) return;
+        if (!currentUser || isSavingRef.current) return;
+        
+        isSavingRef.current = true;
         setSaveStatus('saving');
         try {
-            await setDoc(doc(db, 'users', currentUser.uid), gamificationData, { merge: true });
+            await setDoc(doc(db, 'users', currentUser.uid), gamificationDataRef.current, { merge: true });
             setSaveStatus('saved');
             setTimeout(() => setSaveStatus('idle'), 2000);
         } catch (error) {
             console.error("Failed to save user data:", error);
             setSaveStatus('error');
+        } finally {
+            isSavingRef.current = false;
         }
-    }, [currentUser, gamificationData]);
+    }, [currentUser]);
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -789,6 +800,10 @@ function App() {
     useEffect(() => {
         const handleVisibilityChange = () => {
             if (document.visibilityState === 'hidden' && currentUser) {
+                 if (debouncedSave.current) {
+                    clearTimeout(debouncedSave.current);
+                    debouncedSave.current = null;
+                }
                 saveUserData();
             }
         };
@@ -1097,12 +1112,25 @@ function App() {
         setAnalysis(null);
     };
     
-    const handleLogout = async () => {
-        if (currentUser) {
-            await saveUserData();
+    const handleLogout = useCallback(async () => {
+        // Clear any pending saves to prevent a race condition where an old state is saved after logout.
+        if (debouncedSave.current) {
+            clearTimeout(debouncedSave.current);
+            debouncedSave.current = null;
         }
-        await signOut(auth);
-    };
+
+        try {
+            // Perform one final, immediate save of the current state before signing out.
+            if (currentUser) {
+                await saveUserData();
+            }
+            // Sign the user out from Firebase.
+            await signOut(auth);
+        } catch (error) {
+            // Log any errors that occur during the process.
+            console.error("Erreur lors de la déconnexion :", error);
+        }
+    }, [currentUser, saveUserData]);
 
     return (
         <>
