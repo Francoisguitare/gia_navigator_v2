@@ -1,7 +1,7 @@
 
 import React, { useMemo } from 'react';
-import { NOTES_SHARP, NOTES_FLAT, TUNING, NUM_FRETS } from '../constants.ts';
-import { NotePosition } from '../types.ts';
+import { NOTES_SHARP, NOTES_FLAT, TUNING, NUM_FRETS } from '../constants';
+import { NotePosition } from '../types';
 
 interface HighlightedNote {
   note: string;
