@@ -938,17 +938,18 @@ function App() {
             setError(null);
             try {
                 const result = await analyzeProgressionWithGemini(chords);
-                if (result) {
+                if (result && Array.isArray(result.progressionAnalysis) && result.progressionAnalysis.length > 0) {
                     setAnalysis(result);
                     const defaultNotes = {};
                     result.progressionAnalysis.forEach((chordAnalysis, index) => {
-                        const rootNote = chordAnalysis.allTargetOptions.find(opt => opt.interval === 'R');
+                        const rootNote = chordAnalysis?.allTargetOptions?.find(opt => opt.interval === 'R');
                         if(rootNote) defaultNotes[index] = rootNote;
                     });
                     setSelectedNotes(defaultNotes);
                 } else {
-                    setError("L'analyse IA a échoué. Vérifiez la console pour plus de détails.");
+                    setError("L'analyse IA a retourné une réponse invalide ou vide.");
                     setAnalysis(null);
+                    console.error("Invalid or empty analysis from Gemini:", result);
                 }
             } catch (e) {
                 setError("Failed to analyze progression.");
@@ -1003,7 +1004,7 @@ function App() {
     }, [playerState, isYoutubePlaying, updateGamificationData]);
 
     const analysisByCell = useMemo(() => {
-        if (!analysis) return [];
+        if (!analysis || !Array.isArray(analysis.progressionAnalysis)) return [];
         const result = Array(TOTAL_CELLS).fill(undefined);
         let analysisIndex = 0;
         chords.forEach((chord, cellIndex) => {
@@ -1016,7 +1017,7 @@ function App() {
     }, [analysis, chords]);
 
     const cellToAnalysisIndexMap = useMemo(() => {
-        if (!analysis) return {};
+        if (!analysis || !Array.isArray(analysis.progressionAnalysis)) return {};
         const map = {};
         let analysisIndex = 0;
         chords.forEach((chord, cellIndex) => {
@@ -1101,19 +1102,19 @@ function App() {
     };
 
     const getHighlightedNotes = useCallback(() => {
-        if (!analysis?.progressionAnalysis.length) return [];
+        if (!analysis?.progressionAnalysis?.length) return [];
         if (playerState === PlayerState.Stopped) {
             const firstAnalysisIndex = cellToAnalysisIndexMap[Object.keys(cellToAnalysisIndexMap)[0]];
             if (firstAnalysisIndex === undefined) return [];
             const firstAnalysis = analysis.progressionAnalysis[firstAnalysisIndex];
-            const selectedNote = selectedNotes[firstAnalysisIndex] ?? firstAnalysis.allTargetOptions.find(o => o.interval === 'R');
+            const selectedNote = selectedNotes[firstAnalysisIndex] ?? firstAnalysis?.allTargetOptions?.find(o => o.interval === 'R');
             return selectedNote ? [{ note: selectedNote.note, color: '#a855f7', isBlinking: false }] : [];
         }
         if (playerState === PlayerState.CountingDown) {
             const firstAnalysisIndex = cellToAnalysisIndexMap[Object.keys(cellToAnalysisIndexMap)[0]];
             if (firstAnalysisIndex === undefined) return [];
             const firstAnalysis = analysis.progressionAnalysis[firstAnalysisIndex];
-            const selectedNote = selectedNotes[firstAnalysisIndex] ?? firstAnalysis.allTargetOptions.find(o => o.interval === 'R');
+            const selectedNote = selectedNotes[firstAnalysisIndex] ?? firstAnalysis?.allTargetOptions?.find(o => o.interval === 'R');
             return selectedNote ? [{ note: selectedNote.note, color: '#facc15', isBlinking: false }] : [];
         }
         const currentCellIndex = Math.floor(currentBeat / 2);
@@ -1135,9 +1136,9 @@ function App() {
         const nextAnalysis = analysis.progressionAnalysis[nextAnalysisIndex];
         if (!currentAnalysis || !nextAnalysis) return [];
         const notes = [];
-        const currentSelectedNote = selectedNotes[currentAnalysisIndex] ?? currentAnalysis.allTargetOptions.find(o => o.interval === 'R');
+        const currentSelectedNote = selectedNotes[currentAnalysisIndex] ?? currentAnalysis.allTargetOptions?.find(o => o.interval === 'R');
         if (currentSelectedNote) notes.push({ note: currentSelectedNote.note, color: '#a855f7', isBlinking: true });
-        const nextSelectedNote = selectedNotes[nextAnalysisIndex] ?? nextAnalysis.allTargetOptions.find(o => o.interval === 'R');
+        const nextSelectedNote = selectedNotes[nextAnalysisIndex] ?? nextAnalysis.allTargetOptions?.find(o => o.interval === 'R');
         if (nextSelectedNote && nextSelectedNote.note !== currentSelectedNote?.note) {
              notes.push({ note: nextSelectedNote.note, color: '#facc15', isBlinking: false });
         }
@@ -1322,12 +1323,12 @@ function App() {
                                     <div className="flex items-baseline gap-4 mb-4">
                                         <p className="font-semibold text-blue-300">Tonalité: {analysis.tonalite}</p>
                                         <div className="flex gap-2 items-center text-sm text-gray-300 flex-wrap">
-                                            {analysis.notesGamme.map(n => <span key={n} className="font-mono bg-gray-700 px-1.5 py-0.5 rounded-md">{n}</span>)}
+                                            {analysis.notesGamme && analysis.notesGamme.map(n => <span key={n} className="font-mono bg-gray-700 px-1.5 py-0.5 rounded-md">{n}</span>)}
                                         </div>
                                     </div>
                                     <div className="flex flex-wrap -m-1">
-                                    {analysis.progressionAnalysis.map((item, index) => (
-                                        <AnalysisCard 
+                                    {analysis.progressionAnalysis && analysis.progressionAnalysis.map((item, index) => (
+                                        item && <AnalysisCard 
                                             key={index}
                                             analysis={item}
                                             analysisIndex={index}
