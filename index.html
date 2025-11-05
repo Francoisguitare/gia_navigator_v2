@@ -237,10 +237,10 @@ const analyzeProgressionWithGemini = async (progression) => {
             contents: prompt,
             config: {
                 responseMimeType: "application/json",
-                responseSchema: {
+                 responseSchema: {
                     type: Type.OBJECT,
                     properties: {
-                        tonalite: { type: Type.STRING, description: "La tonalité de la progression." },
+                        tonalite: { type: Type.STRING },
                         notesGamme: { type: Type.ARRAY, items: { type: Type.STRING } },
                         progressionAnalysis: {
                             type: Type.ARRAY,
@@ -249,9 +249,9 @@ const analyzeProgressionWithGemini = async (progression) => {
                                 properties: {
                                     accord: { type: Type.STRING },
                                     degre: { type: Type.STRING },
-                                    notes: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Les notes composant l'accord." },
-                                    front: { type: Type.STRING, enum: ["TENSION", "RÉSOLUTION", "HORS TONALITÉ"] },
-                                    actionRythmique: { type: Type.STRING, enum: ["RAPIDE / AGRESSIF", "LENT / LYRIQUE"] },
+                                    notes: { type: Type.ARRAY, items: { type: Type.STRING } },
+                                    front: { type: Type.STRING },
+                                    actionRythmique: { type: Type.STRING },
                                     allTargetOptions: {
                                         type: Type.ARRAY,
                                         items: {
@@ -261,17 +261,14 @@ const analyzeProgressionWithGemini = async (progression) => {
                                                 interval: { type: Type.STRING },
                                                 intention: { type: Type.STRING },
                                                 description: { type: Type.STRING },
-                                                type: { type: Type.STRING, enum: ['fondatrice', 'expressive'] }
-                                            },
-                                            required: ["note", "interval", "intention", "description", "type"]
+                                                type: { type: Type.STRING }
+                                            }
                                         }
                                     }
-                                },
-                                required: ["accord", "degre", "notes", "front", "actionRythmique", "allTargetOptions"]
+                                }
                             }
                         }
-                    },
-                    required: ["tonalite", "notesGamme", "progressionAnalysis"]
+                    }
                 }
             }
         });
@@ -453,11 +450,14 @@ const AuthModal = ({ isOpen, onClose }) => {
         return 'Adresse email invalide.';
       case 'auth/user-not-found':
       case 'auth/wrong-password':
+      case 'auth/invalid-credential':
         return 'Email ou mot de passe incorrect.';
       case 'auth/email-already-in-use':
         return 'Cette adresse email est déjà utilisée.';
       case 'auth/weak-password':
         return 'Le mot de passe doit contenir au moins 6 caractères.';
+      case 'auth/operation-not-allowed':
+        return "Erreur de configuration : La connexion par Email/Mot de passe n'est pas activée. (Note pour le développeur : veuillez l'activer dans votre console Firebase -> Authentication -> Sign-in method).";
       default:
         return 'Une erreur est survenue. Veuillez réessayer.';
     }
@@ -481,6 +481,7 @@ const AuthModal = ({ isOpen, onClose }) => {
       }
       onClose();
     } catch (err) {
+      console.error("Firebase Auth Error:", err, err.code);
       setError(getFirebaseErrorMessage(err.code));
     } finally {
       setIsLoading(false);
@@ -561,6 +562,54 @@ const AuthModal = ({ isOpen, onClose }) => {
 
 // === FROM App.tsx ===
 // Main application component and its sub-components
+const YoutubePlayer = ({ onPlaybackChange }) => {
+    const [urlInput, setUrlInput] = useState('');
+    const [videoId, setVideoId] = useState(null);
+
+    const handleLoadVideo = () => {
+        const youtubeRegex = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
+        const match = urlInput.match(youtubeRegex);
+        const newVideoId = match ? match[1] : null;
+        setVideoId(newVideoId);
+        onPlaybackChange(!!newVideoId);
+    };
+    
+    const handleClear = () => {
+        setUrlInput('');
+        setVideoId(null);
+        onPlaybackChange(false);
+    }
+
+    return (
+        <div className="flex flex-col gap-3">
+             <div className="flex gap-2">
+                <input
+                    type="text"
+                    value={urlInput}
+                    onChange={e => setUrlInput(e.target.value)}
+                    placeholder="Collez une URL YouTube ici..."
+                    className="w-full p-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+                <button onClick={handleLoadVideo} className="bg-purple-600 hover:bg-purple-500 text-white font-semibold py-2 px-4 rounded-lg transition">Charger</button>
+                {videoId && <button onClick={handleClear} className="bg-red-800/50 hover:bg-red-700 text-white font-semibold py-2 px-3 rounded-lg transition">Vider</button>}
+            </div>
+            {videoId && (
+                <div className="aspect-video w-full max-w-2xl mx-auto rounded-lg overflow-hidden border-2 border-gray-700">
+                    <iframe
+                        width="100%"
+                        height="100%"
+                        src={`https://www.youtube.com/embed/${videoId}`}
+                        title="YouTube video player"
+                        frameBorder="0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen>
+                    </iframe>
+                </div>
+            )}
+        </div>
+    );
+};
+
 const CircleProgress = ({ progress, size, strokeWidth, level }) => {
     const center = size / 2;
     const radius = center - strokeWidth / 2;
@@ -675,6 +724,7 @@ function App() {
     const [currentBeat, setCurrentBeat] = useState(-1);
     const [tempo, setTempo] = useState(60);
     const [volumes, setVolumes] = useState({ metro: -12, bass: -6, chord: -14 });
+    const [isYoutubePlaying, setIsYoutubePlaying] = useState(false);
     
     const [gamificationData, setGamificationData] = useState(INITIAL_GAMIFICATION_DATA);
     const [currentUser, setCurrentUser] = useState(null);
@@ -734,8 +784,8 @@ function App() {
             setError(null);
             try {
                 const result = await analyzeProgressionWithGemini(chords);
-                setAnalysis(result);
-                if(result) {
+                if (result) {
+                    setAnalysis(result);
                     const defaultNotes = {};
                     result.progressionAnalysis.forEach((chordAnalysis, index) => {
                         const rootNote = chordAnalysis.allTargetOptions.find(opt => opt.interval === 'R');
@@ -744,6 +794,9 @@ function App() {
                         }
                     });
                     setSelectedNotes(defaultNotes);
+                } else {
+                    setError("L'analyse IA a échoué. Vérifiez la console pour plus de détails.");
+                    setAnalysis(null);
                 }
             } catch (e) {
                 setError("Failed to analyze progression.");
@@ -785,7 +838,7 @@ function App() {
 
     useEffect(() => {
         let timer;
-        if (playerState === PlayerState.Playing) {
+        if (playerState === PlayerState.Playing || isYoutubePlaying) {
             timer = setInterval(() => {
                 setGamificationData(prev => {
                     const newXp = prev.xp + GAMIFICATION_XP_PER_SECOND;
@@ -800,7 +853,7 @@ function App() {
             }, 1000);
         }
         return () => clearInterval(timer);
-    }, [playerState]);
+    }, [playerState, isYoutubePlaying]);
 
     const analysisByCell = useMemo(() => {
         if (!analysis) return [];
@@ -994,6 +1047,10 @@ function App() {
     const handleSelectNote = (analysisIndex, note) => {
         setSelectedNotes(prev => ({ ...prev, [analysisIndex]: note }));
     };
+    
+    const handleYoutubePlaybackChange = (isPlaying) => {
+        setIsYoutubePlaying(isPlaying);
+    };
 
     const loadPreset = () => {
         const preset = PRESET_PROGRESSIONS[Math.floor(Math.random() * PRESET_PROGRESSIONS.length)];
@@ -1116,6 +1173,11 @@ function App() {
                              ) : (
                                  <div className="text-gray-500 text-center h-48 flex items-center justify-center">Entrez une grille d'accords pour commencer l'analyse.</div>
                              )}
+                        </section>
+                        
+                        <section className="p-4 bg-gray-900/50 rounded-xl border border-gray-800">
+                            <h2 className="text-lg font-bold text-white mb-4">3. Backing Track (Optionnel)</h2>
+                            <YoutubePlayer onPlaybackChange={handleYoutubePlaybackChange} />
                         </section>
                     </main>
                 </div>
