@@ -51,7 +51,23 @@
 </head>
   <body>
     <div id="root"></div>
-    <!-- Change script type to text/babel for Babel to process it as a module -->
-    <script type="text/babel" data-type="module" src="index.tsx"></script>
+    <!-- Inlined the entry point script to bypass browser MIME type check issues -->
+    <script type="text/babel" data-type="module">
+      import React from 'react';
+      import ReactDOM from 'react-dom/client';
+      import App from './App.tsx';
+
+      const rootElement = document.getElementById('root');
+      if (!rootElement) {
+        throw new Error("Could not find root element to mount to");
+      }
+
+      const root = ReactDOM.createRoot(rootElement);
+      root.render(
+        <React.StrictMode>
+          <App />
+        </React.StrictMode>
+      );
+    </script>
   </body>
 </html>

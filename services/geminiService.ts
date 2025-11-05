@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { FullAnalysis } from '../types';
+import { FullAnalysis } from '../types.ts';
 
 export const analyzeProgressionWithGemini = async (progression: string[]): Promise<FullAnalysis | null> => {
     if (!process.env.API_KEY) {

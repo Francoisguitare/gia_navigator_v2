@@ -3,14 +3,14 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { MonoSynth, PolySynth, Synth, MembraneSynth, Part, Transport, Draw, context, start } from 'tone';
 import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { auth, db } from './services/firebase';
+import { auth, db } from './services/firebase.ts';
 
-import { FullAnalysis, ChordAnalysis, TargetNote, GamificationData, PlayerState } from './types';
-import { TOTAL_CELLS, GAMIFICATION_XP_PER_LEVEL, GAMIFICATION_XP_PER_SECOND, PRESET_PROGRESSIONS } from './constants';
-import { analyzeProgressionWithGemini } from './services/geminiService';
-import GuitarNeck from './components/GuitarNeck';
-import AuthModal from './components/AuthModal';
-import { PlayIcon, StopIcon, LoadingSpinner, TrophyIcon, ClockIcon, UserIcon } from './components/icons';
+import { FullAnalysis, ChordAnalysis, TargetNote, GamificationData, PlayerState } from './types.ts';
+import { TOTAL_CELLS, GAMIFICATION_XP_PER_LEVEL, GAMIFICATION_XP_PER_SECOND, PRESET_PROGRESSIONS } from './constants.ts';
+import { analyzeProgressionWithGemini } from './services/geminiService.ts';
+import GuitarNeck from './components/GuitarNeck.tsx';
+import AuthModal from './components/AuthModal.tsx';
+import { PlayIcon, StopIcon, LoadingSpinner, TrophyIcon, ClockIcon, UserIcon } from './components/icons.tsx';
 
 const CircleProgress: React.FC<{ progress: number; size: number; strokeWidth: number; level: number }> = ({ progress, size, strokeWidth, level }) => {
     const center = size / 2;
