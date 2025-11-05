@@ -51,23 +51,1087 @@
 </head>
   <body>
     <div id="root"></div>
-    <!-- Inlined the entry point script to bypass browser MIME type check issues -->
+    <!-- 
+      APPLICATION BUNDLE
+      To solve the browser's strict MIME type checking issue, all TypeScript/JSX files
+      have been consolidated into this single script block. Babel transpiles this block
+      in memory, avoiding any network requests for .ts/.tsx files which were failing.
+    -->
     <script type="text/babel" data-type="module">
-      import React from 'react';
-      import ReactDOM from 'react-dom/client';
-      import App from './App.tsx';
+// === IMPORTS (Libraries) ===
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import ReactDOM from 'react-dom/client';
+import { GoogleGenAI, Type } from "@google/genai";
+import { MonoSynth, PolySynth, Synth, MembraneSynth, Part, Transport, Draw, context, start } from 'tone';
+import { initializeApp } from "firebase/app";
+import { getAuth, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
+import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
 
-      const rootElement = document.getElementById('root');
-      if (!rootElement) {
-        throw new Error("Could not find root element to mount to");
+
+// === FROM types.ts ===
+// Interfaces and Enums are defined here directly
+interface TargetNote {
+  note: string;
+  interval: string;
+  intention: string;
+  description: string;
+  type: 'fondatrice' | 'expressive';
+}
+
+interface ChordAnalysis {
+  accord: string;
+  degre: string;
+  front: 'TENSION' | 'RÉSOLUTION' | 'HORS TONALITÉ';
+  actionRythmique: 'RAPIDE / AGRESSIF' | 'LENT / LYRIQUE';
+  notes: string[];
+  allTargetOptions: TargetNote[];
+}
+
+interface FullAnalysis {
+  tonalite: string;
+  notesGamme: string[];
+  progressionAnalysis: ChordAnalysis[];
+}
+
+interface NotePosition {
+  note: string;
+  string: number;
+  fret: number;
+}
+
+interface GamificationData {
+  xp: number;
+  level: number;
+  timePlayed: number; // in seconds
+}
+
+enum PlayerState {
+  Stopped,
+  CountingDown,
+  Playing,
+}
+
+
+// === FROM constants.ts ===
+// App-wide constants are defined here
+const NOTES_SHARP = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const NOTES_FLAT = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
+
+const TUNING = ['E', 'A', 'D', 'G', 'B', 'E'];
+const TOTAL_CELLS = 24;
+const NUM_FRETS = 17;
+
+const GAMIFICATION_XP_PER_LEVEL = 1000;
+const GAMIFICATION_XP_PER_SECOND = 2;
+
+const PRESET_PROGRESSIONS = [
+    { name: "Pop/Rock Mineur", chords: ['Am', '', 'G', '', 'D', '', 'E', ''] },
+    { name: "Jazz ii-V-I (Majeur)", chords: ['Dm7', '', 'G7', '', 'Cmaj7', ''] },
+    { name: "Pop/Rock Majeur", chords: ['C', '', 'G', '', 'Am', '', 'F', ''] },
+    { name: "Blues 12 Mesures (en A)", chords: ['A7','','A7','','A7','','A7','','D7','','D7','','A7','','A7','','E7','','D7','','A7','','A7',''] }
+];
+
+
+// === FROM services/firebase.ts ===
+// Firebase configuration and initialization
+const firebaseConfig = {
+  apiKey: "AIzaSyBTE9nPP27Pyu0VZ0bF3Hf16d1jsBeumcs",
+  authDomain: "gia-navigator.firebaseapp.com",
+  projectId: "gia-navigator",
+  storageBucket: "gia-navigator.firebasestorage.app",
+  messagingSenderId: "684477512379",
+  appId: "1:684477512379:web:4f2c8b5ec93510aa74c79e"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+
+// === FROM components/icons.tsx ===
+// Icon components
+const PlayIcon = ({ className }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+  </svg>
+);
+
+const StopIcon = ({ className }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+  </svg>
+);
+
+const LoadingSpinner = ({ className }) => (
+  <svg className={`animate-spin ${className}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+  </svg>
+);
+
+const TrophyIcon = ({ className }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" className={className} viewBox="0 0 24 24" fill="currentColor">
+        <path d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94c.63 1.5 1.98 2.63 3.61 2.96V19H7v2h10v-2h-4v-3.1c1.63-.33 2.98-1.46 3.61-2.96C19.08 12.63 21 10.55 21 8V7c0-1.1-.9-2-2-2zm-7 6c-1.66 0-3-1.34-3-3V7h6v1c0 1.66-1.34 3-3 3z" />
+    </svg>
+);
+
+const ClockIcon = ({ className }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+    </svg>
+);
+
+const UserIcon = ({ className }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} viewBox="0 0 24 24" fill="currentColor">
+    <path fillRule="evenodd" d="M18.685 19.097A9.723 9.723 0 0021.75 12c0-5.385-4.365-9.75-9.75-9.75S2.25 6.615 2.25 12a9.723 9.723 0 003.065 7.097A9.716 9.716 0 0012 21.75a9.716 9.716 0 006.685-2.653zm-12.54-1.285A7.486 7.486 0 0112 15a7.486 7.486 0 015.855 2.812A8.224 8.224 0 0112 20.25a8.224 8.224 0 01-5.855-2.438zM15.75 9a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" clipRule="evenodd" />
+  </svg>
+);
+
+const XIcon = ({ className }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+  </svg>
+);
+
+
+// === FROM services/geminiService.ts ===
+// Gemini API service function
+const analyzeProgressionWithGemini = async (progression) => {
+    if (!process.env.API_KEY) {
+        console.error("API_KEY environment variable not set.");
+        return {
+            tonalite: "C Majeur",
+            notesGamme: ["C", "D", "E", "F", "G", "A", "B"],
+            progressionAnalysis: progression.filter(c => c).map((c, i) => ({
+                accord: c,
+                degre: ["I", "V", "vi", "IV"][i % 4],
+                notes: [c.charAt(0), "E", "G"],
+                front: "RÉSOLUTION",
+                actionRythmique: "LENT / LYRIQUE",
+                allTargetOptions: [
+                    { note: c.charAt(0), interval: "R", intention: "Stabilité", description: "", type: "fondatrice" },
+                    { note: "E", interval: "3M", intention: "Couleur", description: "", type: "fondatrice" },
+                    { note: "D", interval: "9e", intention: "Lyrisme", description: "", type: "expressive" },
+                ]
+            }))
+        };
+    }
+    
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+    const prompt = `Analyse la progression d'accords suivante pour un guitariste improvisateur: ${progression.join(' ')}.
+    1. Détermine la tonalité la plus probable (ex: "C Majeur", "A mineur").
+    2. Liste les notes de la gamme correspondante.
+    3. Pour chaque accord de la progression (ignore les cases vides), fournis une analyse détaillée.
+    - accord: Le nom de l'accord.
+    - degre: Le degré de l'accord dans la tonalité (ex: "I", "V7", "vi").
+    - notes: La liste des notes qui composent l'accord (ex: ["C", "E", "G"]).
+    - front: Classifie l'accord comme "RÉSOLUTION" (stable), "TENSION" (dominant, veut résoudre), ou "HORS TONALITÉ" (inattendu, crée une surprise).
+    - actionRythmique: Suggère une approche rythmique: "LENT / LYRIQUE" pour la résolution, "RAPIDE / AGRESSIF" pour la tension.
+    - allTargetOptions: Propose des notes cibles pour l'improvisation, en incluant des notes fondatrices (R, 3, 5, 7) et des notes expressives (9, 11, 13, altérations), avec une brève description de leur "intention" (ex: "Stabilité", "Couleur", "Tension Ultime").`;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        tonalite: { type: Type.STRING, description: "La tonalité de la progression." },
+                        notesGamme: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        progressionAnalysis: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    accord: { type: Type.STRING },
+                                    degre: { type: Type.STRING },
+                                    notes: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Les notes composant l'accord." },
+                                    front: { type: Type.STRING, enum: ["TENSION", "RÉSOLUTION", "HORS TONALITÉ"] },
+                                    actionRythmique: { type: Type.STRING, enum: ["RAPIDE / AGRESSIF", "LENT / LYRIQUE"] },
+                                    allTargetOptions: {
+                                        type: Type.ARRAY,
+                                        items: {
+                                            type: Type.OBJECT,
+                                            properties: {
+                                                note: { type: Type.STRING },
+                                                interval: { type: Type.STRING },
+                                                intention: { type: Type.STRING },
+                                                description: { type: Type.STRING },
+                                                type: { type: Type.STRING, enum: ['fondatrice', 'expressive'] }
+                                            },
+                                            required: ["note", "interval", "intention", "description", "type"]
+                                        }
+                                    }
+                                },
+                                required: ["accord", "degre", "notes", "front", "actionRythmique", "allTargetOptions"]
+                            }
+                        }
+                    },
+                    required: ["tonalite", "notesGamme", "progressionAnalysis"]
+                }
+            }
+        });
+
+        const jsonText = response.text.trim();
+        const result = JSON.parse(jsonText);
+        return result;
+
+    } catch (error) {
+        console.error("Error calling Gemini API:", error);
+        return null;
+    }
+};
+
+
+// === FROM components/GuitarNeck.tsx ===
+// GuitarNeck component and helpers
+const calculateNotePositions = () => {
+  const positions = [];
+  const noteIndexMap = {};
+  NOTES_SHARP.forEach((n, i) => (noteIndexMap[n] = i));
+  NOTES_FLAT.forEach((n, i) => (noteIndexMap[n] = i));
+
+  for (let stringIndex = 0; stringIndex < 6; stringIndex++) {
+    const openStringNote = TUNING[5 - stringIndex];
+    let currentNoteIndex = noteIndexMap[openStringNote];
+    for (let fret = 0; fret <= NUM_FRETS; fret++) {
+      const noteName = NOTES_SHARP[currentNoteIndex % 12];
+      positions.push({ note: noteName, string: stringIndex, fret });
+
+      const noteNameFlat = NOTES_FLAT[currentNoteIndex % 12];
+      if (noteName !== noteNameFlat) {
+        positions.push({ note: noteNameFlat, string: stringIndex, fret });
       }
+      currentNoteIndex++;
+    }
+  }
+  return positions;
+};
 
-      const root = ReactDOM.createRoot(rootElement);
-      root.render(
-        <React.StrictMode>
-          <App />
-        </React.StrictMode>
-      );
+const notePositions = calculateNotePositions();
+
+const GuitarNeck = ({ highlightedNotes, scaleNotes = [] }) => {
+  const neckRef = React.useRef(null);
+
+  const neckDimensions = {
+    height: 140,
+    nutWidth: 40,
+    getNeckWidth: () => (neckRef.current?.clientWidth ?? 800) - 40,
+  };
+
+  const getNoteCoordinates = (string, fret) => {
+    const y = (neckDimensions.height / 12) * (string * 2 + 1);
+    const x =
+      fret === 0
+        ? neckDimensions.nutWidth / 2
+        : neckDimensions.nutWidth + ((fret - 0.5) * (neckDimensions.getNeckWidth() / NUM_FRETS));
+    return { x, y };
+  };
+
+  const scaleNoteElements = useMemo(() => {
+    return scaleNotes.flatMap(note =>
+      notePositions
+        .filter(p => p.note === note && p.fret > 0)
+        .map(p => {
+          const { x, y } = getNoteCoordinates(p.string, p.fret);
+          return <circle key={`${note}-${p.string}-${p.fret}`} cx={x} cy={y} r={10} fill="none" stroke="#4b5563" strokeWidth="1.5" opacity="0.4" />;
+        })
+    );
+  }, [scaleNotes]);
+
+  const highlightedNoteElements = useMemo(() => {
+    return highlightedNotes.flatMap(hNote =>
+      notePositions
+        .filter(p => p.note === hNote.note && p.fret > 0)
+        .map(p => {
+          const { x, y } = getNoteCoordinates(p.string, p.fret);
+          return (
+            <g key={`${hNote.note}-${p.string}-${p.fret}`}>
+              <circle
+                cx={x}
+                cy={y}
+                r={10}
+                fill={hNote.color}
+                stroke="#030712"
+                strokeWidth={2}
+                className={`transition-all duration-200 ${hNote.isBlinking ? 'note-dot-blinking' : ''}`}
+              />
+              <text x={x} y={y} dy="0.35em" textAnchor="middle" fontSize="10" fontWeight="bold" fill="#030712" className="pointer-events-none">
+                {hNote.label ?? hNote.note}
+              </text>
+            </g>
+          );
+        })
+    );
+  }, [highlightedNotes]);
+
+
+  return (
+    <div className="w-full overflow-x-auto bg-gray-900 p-2 rounded-lg">
+      <svg ref={neckRef} width="100%" height={neckDimensions.height + 20} className="min-w-[800px]">
+        <rect x="0" y="0" width="100%" height={neckDimensions.height} fill="#1f2937" rx="8" />
+        
+        <g id="scale-notes">{scaleNoteElements}</g>
+
+        {/* Frets and Strings */}
+        {Array.from({ length: 6 }).map((_, i) => (
+          <line
+            key={`string-${i}`}
+            x1={neckDimensions.nutWidth}
+            y1={(neckDimensions.height / 12) * (i * 2 + 1)}
+            x2="100%"
+            y2={(neckDimensions.height / 12) * (i * 2 + 1)}
+            stroke="#4b5563"
+            strokeWidth={1 + (i * 0.2)}
+          />
+        ))}
+        {Array.from({ length: NUM_FRETS + 1 }).map((_, i) => (
+          <line
+            key={`fret-${i}`}
+            x1={neckDimensions.nutWidth + (i * (neckDimensions.getNeckWidth() / NUM_FRETS))}
+            y1={(neckDimensions.height / 12)}
+            x2={neckDimensions.nutWidth + (i * (neckDimensions.getNeckWidth() / NUM_FRETS))}
+            y2={(neckDimensions.height / 12) * 11}
+            stroke={i === 0 ? '#d1d5db' : '#6b7280'}
+            strokeWidth={i === 0 ? 5 : 2}
+          />
+        ))}
+        
+        {/* Fret Markers */}
+        {[3, 5, 7, 9, 15, 17].map(fret => (
+            <circle key={`marker-${fret}`} cx={neckDimensions.nutWidth + ((fret - 0.5) * (neckDimensions.getNeckWidth() / NUM_FRETS))} cy={neckDimensions.height / 2} r={5} fill="#4b5563" />
+        ))}
+        <circle cx={neckDimensions.nutWidth + ((12 - 0.5) * (neckDimensions.getNeckWidth() / NUM_FRETS))} cy={neckDimensions.height / 3} r={5} fill="#4b5563" />
+        <circle cx={neckDimensions.nutWidth + ((12 - 0.5) * (neckDimensions.getNeckWidth() / NUM_FRETS))} cy={2 * neckDimensions.height / 3} r={5} fill="#4b5563" />
+        
+        {/* Fret Numbers */}
+        {[3, 5, 7, 9, 12, 15, 17].map(fret => (
+            <text key={`fret-num-${fret}`} x={neckDimensions.nutWidth + ((fret - 0.5) * (neckDimensions.getNeckWidth() / NUM_FRETS))} y={neckDimensions.height + 15} textAnchor="middle" fontSize="10" fill="#9ca3af">{fret}</text>
+        ))}
+
+        <g id="highlighted-notes">{highlightedNoteElements}</g>
+      </svg>
+    </div>
+  );
+};
+
+
+// === FROM components/AuthModal.tsx ===
+// AuthModal component
+const AuthModal = ({ isOpen, onClose }) => {
+  const [activeTab, setActiveTab] = useState('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setEmail('');
+      setPassword('');
+      setError(null);
+      setIsLoading(false);
+      setActiveTab('login');
+    }
+  }, [isOpen]);
+
+  const getFirebaseErrorMessage = (errorCode) => {
+    switch (errorCode) {
+      case 'auth/invalid-email':
+        return 'Adresse email invalide.';
+      case 'auth/user-not-found':
+      case 'auth/wrong-password':
+        return 'Email ou mot de passe incorrect.';
+      case 'auth/email-already-in-use':
+        return 'Cette adresse email est déjà utilisée.';
+      case 'auth/weak-password':
+        return 'Le mot de passe doit contenir au moins 6 caractères.';
+      default:
+        return 'Une erreur est survenue. Veuillez réessayer.';
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      if (activeTab === 'login') {
+        await signInWithEmailAndPassword(auth, email, password);
+      } else {
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        await setDoc(doc(db, "users", userCredential.user.uid), {
+            xp: 0,
+            level: 1,
+            timePlayed: 0
+        });
+      }
+      onClose();
+    } catch (err) {
+      setError(getFirebaseErrorMessage(err.code));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="w-full max-w-sm bg-gray-900 rounded-2xl border border-gray-700 shadow-2xl shadow-purple-500/10 p-8" onClick={e => e.stopPropagation()}>
+        <div className="flex justify-end">
+             <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors">
+                <XIcon className="w-6 h-6"/>
+            </button>
+        </div>
+        
+        <div className="mb-6">
+          <div className="flex border-b border-gray-700">
+            <button
+              onClick={() => setActiveTab('login')}
+              className={`w-1/2 py-3 text-sm font-bold transition-colors ${activeTab === 'login' ? 'text-purple-400 border-b-2 border-purple-400' : 'text-gray-400 hover:text-white'}`}
+            >
+              CONNEXION
+            </button>
+            <button
+              onClick={() => setActiveTab('signup')}
+              className={`w-1/2 py-3 text-sm font-bold transition-colors ${activeTab === 'signup' ? 'text-purple-400 border-b-2 border-purple-400' : 'text-gray-400 hover:text-white'}`}
+            >
+              INSCRIPTION
+            </button>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="email" className="block text-sm font-medium text-gray-400 mb-2">Email</label>
+              <input
+                type="email"
+                id="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                required
+                className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                placeholder="vous@email.com"
+              />
+            </div>
+            <div>
+              <label htmlFor="password"className="block text-sm font-medium text-gray-400 mb-2">Mot de passe</label>
+              <input
+                type="password"
+                id="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                required
+                className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                placeholder="********"
+              />
+            </div>
+          </div>
+          
+          {error && <p className="text-red-400 text-sm mt-4 text-center">{error}</p>}
+
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="w-full mt-6 py-3 px-4 bg-purple-600 hover:bg-purple-500 rounded-lg font-semibold text-white transition-all duration-200 flex items-center justify-center disabled:bg-gray-600 disabled:cursor-not-allowed"
+          >
+            {isLoading ? <LoadingSpinner className="w-5 h-5"/> : (activeTab === 'login' ? 'Se connecter' : "S'inscrire")}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+
+// === FROM App.tsx ===
+// Main application component and its sub-components
+const CircleProgress = ({ progress, size, strokeWidth, level }) => {
+    const center = size / 2;
+    const radius = center - strokeWidth / 2;
+    const circumference = 2 * Math.PI * radius;
+    const offset = circumference - (progress / 100) * circumference;
+
+    return (
+        <div className="relative" style={{ width: size, height: size }}>
+            <svg width={size} height={size} className="-rotate-90">
+                <circle stroke="#374151" fill="transparent" strokeWidth={strokeWidth} r={radius} cx={center} cy={center} />
+                <circle
+                    stroke="#facc15"
+                    fill="transparent"
+                    strokeWidth={strokeWidth}
+                    strokeDasharray={circumference}
+                    strokeDashoffset={offset}
+                    r={radius}
+                    cx={center}
+                    cy={center}
+                    strokeLinecap="round"
+                    className="transition-all duration-300 ease-linear"
+                />
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <span className="text-xs font-semibold text-yellow-500">LVL</span>
+                <span className="text-xl font-bold text-white">{level}</span>
+            </div>
+        </div>
+    );
+};
+
+const GamificationDashboard = ({ data }) => {
+    const levelProgress = (data.xp / GAMIFICATION_XP_PER_LEVEL) * 100;
+    return (
+        <div className="fixed bottom-0 left-0 right-0 bg-gray-950/80 backdrop-blur-sm border-t border-gray-800 p-3 z-30">
+            <div className="w-full max-w-7xl mx-auto flex items-center justify-between gap-4 text-sm sm:justify-around">
+                <div className="flex items-center gap-4">
+                     <CircleProgress progress={levelProgress} size={50} strokeWidth={5} level={data.level} />
+                     <div className="flex flex-col">
+                        <span className="font-bold text-lg text-white">Niveau {data.level}</span>
+                        <span className="text-xs text-gray-400">{data.xp} / {GAMIFICATION_XP_PER_LEVEL} XP</span>
+                     </div>
+                </div>
+                <div className="flex flex-col items-center gap-1 text-cyan-400">
+                     <ClockIcon className="w-6 h-6"/>
+                     <span className="font-semibold text-sm">{Math.floor(data.timePlayed / 60)}m {data.timePlayed % 60}s</span>
+                     <span className="text-xs text-gray-400">Temps de jeu</span>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const AnalysisCard = ({ analysis, analysisIndex, onSelectNote, selectedNote }) => {
+    const frontStyles = {
+        'RÉSOLUTION': 'border-blue-500/50 bg-blue-500/10',
+        'TENSION': 'border-red-500/50 bg-red-500/10',
+        'HORS TONALITÉ': 'border-yellow-500/50 bg-yellow-500/10'
+    };
+    
+    const badgeStyles = {
+        'RÉSOLUTION': 'bg-blue-500 text-blue-50',
+        'TENSION': 'bg-red-500 text-red-50',
+        'HORS TONALITÉ': 'bg-yellow-500 text-yellow-50'
+    };
+    
+    return (
+        <div className={`p-1 w-full sm:w-1/2 md:w-1/3 lg:w-1/4`}>
+            <div className={`h-full rounded-lg border-2 p-3 flex flex-col space-y-3 ${frontStyles[analysis.front]}`}>
+                <div className="flex justify-between items-start">
+                    <h3 className="text-xl font-extrabold text-white">{analysis.accord} <span className="text-base font-semibold text-gray-400">{analysis.degre}</span></h3>
+                    <span className={`px-2 py-0.5 text-xs font-semibold rounded-full ${badgeStyles[analysis.front]}`}>{analysis.front}</span>
+                </div>
+                <p className="text-xs font-semibold text-gray-400">{analysis.actionRythmique}</p>
+                
+                <div>
+                    <p className="text-xs font-bold tracking-wider text-purple-400 mb-2">NOTE CIBLE</p>
+                    <div className="space-y-1.5">
+                        {analysis.allTargetOptions.map((item, index) => {
+                            const isSelected = selectedNote?.note === item.note && selectedNote?.interval === item.interval;
+                            return (
+                                <button
+                                    key={index}
+                                    onClick={() => onSelectNote(item)}
+                                    className={`w-full text-left p-2 rounded-md text-sm transition-all duration-200 ${
+                                        isSelected
+                                            ? 'bg-purple-500 text-white shadow-lg'
+                                            : 'bg-gray-700/50 hover:bg-gray-600/50'
+                                    }`}
+                                >
+                                    <span className="font-bold">{item.note} ({item.interval})</span> - <span className="text-gray-300">{item.intention}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const INITIAL_GAMIFICATION_DATA = { xp: 0, level: 1, timePlayed: 0 };
+
+function App() {
+    const [chords, setChords] = useState(Array(TOTAL_CELLS).fill(''));
+    const [analysis, setAnalysis] = useState(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const [selectedNotes, setSelectedNotes] = useState({});
+
+    const [playerState, setPlayerState] = useState(PlayerState.Stopped);
+    const [currentBeat, setCurrentBeat] = useState(-1);
+    const [tempo, setTempo] = useState(60);
+    const [volumes, setVolumes] = useState({ metro: -12, bass: -6, chord: -14 });
+    
+    const [gamificationData, setGamificationData] = useState(INITIAL_GAMIFICATION_DATA);
+    const [currentUser, setCurrentUser] = useState(null);
+    const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+
+    const synths = useRef({}).current;
+    const transportPart = useRef(null);
+    const countdownPart = useRef(null);
+    const debouncedAnalysis = useRef(null);
+    const debouncedSave = useRef(null);
+
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                setCurrentUser(user);
+                const userDocRef = doc(db, 'users', user.uid);
+                const userDoc = await getDoc(userDocRef);
+                if (userDoc.exists()) {
+                    setGamificationData(userDoc.data());
+                }
+            } else {
+                setCurrentUser(null);
+                setGamificationData(INITIAL_GAMIFICATION_DATA);
+            }
+        });
+        return () => unsubscribe();
+    }, []);
+    
+    useEffect(() => {
+        if (currentUser) {
+            if (debouncedSave.current) clearTimeout(debouncedSave.current);
+            debouncedSave.current = setTimeout(async () => {
+                await setDoc(doc(db, 'users', currentUser.uid), gamificationData, { merge: true });
+            }, 2000);
+        }
+         return () => {
+            if (debouncedSave.current) clearTimeout(debouncedSave.current);
+        };
+    }, [gamificationData, currentUser]);
+
+
+    const handleChordChange = (index, value) => {
+        const newChords = [...chords];
+        newChords[index] = value;
+        setChords(newChords);
+    };
+
+    const triggerAnalysis = useCallback(() => {
+        if (debouncedAnalysis.current) clearTimeout(debouncedAnalysis.current);
+        debouncedAnalysis.current = setTimeout(async () => {
+            const activeChords = chords.filter(c => c.trim() !== '');
+            if (activeChords.length === 0) {
+                setAnalysis(null);
+                return;
+            }
+            setIsLoading(true);
+            setError(null);
+            try {
+                const result = await analyzeProgressionWithGemini(chords);
+                setAnalysis(result);
+                if(result) {
+                    const defaultNotes = {};
+                    result.progressionAnalysis.forEach((chordAnalysis, index) => {
+                        const rootNote = chordAnalysis.allTargetOptions.find(opt => opt.interval === 'R');
+                        if(rootNote) {
+                            defaultNotes[index] = rootNote;
+                        }
+                    });
+                    setSelectedNotes(defaultNotes);
+                }
+            } catch (e) {
+                setError("Failed to analyze progression.");
+                console.error(e);
+            } finally {
+                setIsLoading(false);
+            }
+        }, 1000);
+    }, [chords]);
+    
+    useEffect(() => {
+        triggerAnalysis();
+    }, [chords, triggerAnalysis]);
+
+    useEffect(() => {
+        synths.bass = new MonoSynth().toDestination();
+        synths.bass.set({ oscillator: { type: 'fatsawtooth' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.5 } });
+        
+        synths.chord = new PolySynth(Synth).toDestination();
+        synths.chord.set({ oscillator: { type: "fatsawtooth", count: 3, spread: 30 }, envelope: { attack: 0.4, decay: 0.1, sustain: 0.8, release: 1.5 } });
+
+        synths.metro = new MembraneSynth().toDestination();
+        synths.metro.set({ pitchDecay: 0.01, octaves: 4, oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.1, sustain: 0.01, release: 0.1 } });
+        
+        return () => {
+            synths.bass?.dispose();
+            synths.chord?.dispose();
+            synths.metro?.dispose();
+            Transport.cancel(0);
+        };
+    }, []);
+
+    useEffect(() => {
+        Transport.bpm.value = tempo;
+        if(synths.metro) synths.metro.volume.value = volumes.metro;
+        if(synths.bass) synths.bass.volume.value = volumes.bass;
+        if(synths.chord) synths.chord.volume.value = volumes.chord;
+    }, [tempo, volumes, synths]);
+
+    useEffect(() => {
+        let timer;
+        if (playerState === PlayerState.Playing) {
+            timer = setInterval(() => {
+                setGamificationData(prev => {
+                    const newXp = prev.xp + GAMIFICATION_XP_PER_SECOND;
+                    const newLevel = prev.level + Math.floor(newXp / GAMIFICATION_XP_PER_LEVEL);
+                    return {
+                        ...prev,
+                        timePlayed: prev.timePlayed + 1,
+                        xp: newXp % GAMIFICATION_XP_PER_LEVEL,
+                        level: newLevel,
+                    };
+                });
+            }, 1000);
+        }
+        return () => clearInterval(timer);
+    }, [playerState]);
+
+    const analysisByCell = useMemo(() => {
+        if (!analysis) return [];
+        const result = Array(TOTAL_CELLS).fill(undefined);
+        let analysisIndex = 0;
+        chords.forEach((chord, cellIndex) => {
+            if (chord.trim() !== '' && analysis.progressionAnalysis[analysisIndex]) {
+                result[cellIndex] = analysis.progressionAnalysis[analysisIndex];
+                analysisIndex++;
+            }
+        });
+        return result;
+    }, [analysis, chords]);
+
+    const cellToAnalysisIndexMap = useMemo(() => {
+        if (!analysis) return {};
+        const map = {};
+        let analysisIndex = 0;
+        chords.forEach((chord, cellIndex) => {
+            if (chord.trim() !== '') {
+                if (analysis.progressionAnalysis[analysisIndex]) {
+                    map[cellIndex] = analysisIndex;
+                    analysisIndex++;
+                }
+            }
+        });
+        return map;
+    }, [analysis, chords]);
+
+    const stopPlayback = useCallback(() => {
+        Transport.stop();
+        Transport.cancel(0);
+        transportPart.current?.dispose();
+        countdownPart.current?.dispose();
+        synths.bass?.triggerRelease(context.currentTime);
+        synths.chord?.releaseAll(context.currentTime);
+        setPlayerState(PlayerState.Stopped);
+        setCurrentBeat(-1);
+    }, [synths]);
+
+
+    const startPlayback = useCallback(() => {
+        const activeChords = chords.map((c, i) => ({ chord: c, index: i })).filter(item => item.chord.trim() !== '');
+        if (activeChords.length === 0) return;
+
+        const lastChordCellIndex = Math.max(...activeChords.map(c => c.index));
+        const totalBeatsInProgression = (lastChordCellIndex + 1) * 2;
+        const loopEndMeasures = Math.ceil(totalBeatsInProgression / 4);
+
+        if (loopEndMeasures === 0) return;
+        
+        const events = [];
+        let chordMap = new Map();
+        chords.forEach((c, i) => { if (c.trim()) chordMap.set(i, c.trim())});
+        
+        for(let i=0; i<loopEndMeasures * 4; i++) {
+            const time = `0:${i}`;
+            const cellIndex = Math.floor(i / 2);
+            
+            events.push({ time, beat: i, type: 'highlight' });
+            events.push({ time, note: i % 4 === 0 ? 'C5' : 'C4', type: 'metro' });
+
+            if(i % 2 === 0 && chordMap.has(cellIndex)) {
+                const chordName = chordMap.get(cellIndex);
+                const rootNote = chordName.match(/^[A-G][#b]?/)?.[0];
+                const chordAnalysis = analysisByCell[cellIndex];
+
+                if(rootNote) {
+                    let nextChangeBeat = totalBeatsInProgression;
+                    for(let j=cellIndex+1; j <= lastChordCellIndex; j++) {
+                        if(chordMap.has(j)) {
+                            nextChangeBeat = j * 2;
+                            break;
+                        }
+                    }
+                    const durationBeats = nextChangeBeat - (i);
+                    const duration = `0:${durationBeats}`;
+                    
+                    events.push({ time, note: rootNote + '2', duration, type: 'bass' });
+                    if (chordAnalysis && chordAnalysis.notes && chordAnalysis.notes.length > 0) {
+                        events.push({ time, notes: chordAnalysis.notes.map(n => n+'4'), duration, type: 'chord' });
+                    }
+                }
+            }
+        }
+        
+        transportPart.current = new Part((time, value) => {
+            if (value.type === 'highlight') {
+                Draw.schedule(() => setCurrentBeat(value.beat), time);
+            } else if (value.type === 'metro' && synths.metro) {
+                synths.metro.triggerAttackRelease(value.note, '16n', time);
+            } else if (value.type === 'bass' && synths.bass) {
+                synths.bass.triggerAttackRelease(value.note, value.duration, time);
+            } else if (value.type === 'chord' && synths.chord) {
+                synths.chord.triggerAttackRelease(value.notes, value.duration, time);
+            }
+        }, events).start('1m');
+        transportPart.current.loop = true;
+        transportPart.current.loopEnd = `${loopEndMeasures}m`;
+        
+        countdownPart.current = new Part((time, value) => {
+             if (synths.metro) synths.metro.triggerAttackRelease('C5', '8n', time);
+             Draw.schedule(() => setCurrentBeat(value.beat), time);
+        }, [{time: '0:0', beat: -4}, {time: '0:1', beat: -3}, {time: '0:2', beat: -2}, {time: '0:3', beat: -1}]).start(0);
+
+        Transport.loop = true;
+        Transport.loopStart = '1m';
+        Transport.loopEnd = `${loopEndMeasures + 1}m`;
+        
+        Transport.scheduleOnce(() => {
+            setPlayerState(PlayerState.Playing);
+        }, '1m');
+
+        Transport.start();
+        setPlayerState(PlayerState.CountingDown);
+    }, [chords, synths, analysisByCell]);
+
+
+    const handlePlayStop = async () => {
+        if (context.state !== 'running') await start();
+        if (playerState !== PlayerState.Stopped) {
+            stopPlayback();
+        } else {
+            startPlayback();
+        }
+    };
+
+    const getHighlightedNotes = useCallback(() => {
+        if (!analysis?.progressionAnalysis.length) return [];
+
+        if (playerState === PlayerState.Stopped) {
+            const firstAnalysisIndex = cellToAnalysisIndexMap[Object.keys(cellToAnalysisIndexMap)[0]];
+             if (firstAnalysisIndex === undefined) return [];
+            const firstAnalysis = analysis.progressionAnalysis[firstAnalysisIndex];
+            const selectedNote = selectedNotes[firstAnalysisIndex] ?? firstAnalysis.allTargetOptions.find(o => o.interval === 'R');
+            return selectedNote ? [{ note: selectedNote.note, color: '#a855f7', isBlinking: false }] : []; // Purple, static
+        }
+        
+        if (playerState === PlayerState.CountingDown) {
+            const firstAnalysisIndex = cellToAnalysisIndexMap[Object.keys(cellToAnalysisIndexMap)[0]];
+            if (firstAnalysisIndex === undefined) return [];
+            const firstAnalysis = analysis.progressionAnalysis[firstAnalysisIndex];
+            const selectedNote = selectedNotes[firstAnalysisIndex] ?? firstAnalysis.allTargetOptions.find(o => o.interval === 'R');
+            return selectedNote ? [{ note: selectedNote.note, color: '#facc15', isBlinking: false }] : []; // Yellow, static
+        }
+
+        const currentCellIndex = Math.floor(currentBeat / 2);
+
+        let currentAnalysisIndex = -1;
+        for (let i = currentCellIndex; i >= 0; i--) {
+            if (cellToAnalysisIndexMap[i] !== undefined) {
+                currentAnalysisIndex = cellToAnalysisIndexMap[i];
+                break;
+            }
+        }
+        if (currentAnalysisIndex === -1) return [];
+
+        let nextAnalysisIndex = -1;
+        for (let i = currentCellIndex + 1; i < TOTAL_CELLS; i++) {
+             if (cellToAnalysisIndexMap[i] !== undefined) {
+                nextAnalysisIndex = cellToAnalysisIndexMap[i];
+                break;
+            }
+        }
+        if (nextAnalysisIndex === -1) { 
+            const firstCellWithChord = Object.keys(cellToAnalysisIndexMap).map(Number).sort((a, b) => a-b)[0];
+            nextAnalysisIndex = cellToAnalysisIndexMap[firstCellWithChord];
+        }
+
+        if (nextAnalysisIndex === undefined) return [];
+        
+        const currentAnalysis = analysis.progressionAnalysis[currentAnalysisIndex];
+        const nextAnalysis = analysis.progressionAnalysis[nextAnalysisIndex];
+        if (!currentAnalysis || !nextAnalysis) return [];
+        
+        const notes = [];
+        const currentSelectedNote = selectedNotes[currentAnalysisIndex] ?? currentAnalysis.allTargetOptions.find(o => o.interval === 'R');
+        if (currentSelectedNote) {
+            notes.push({ note: currentSelectedNote.note, color: '#a855f7', isBlinking: true }); // Purple, blinking
+        }
+        
+        const nextSelectedNote = selectedNotes[nextAnalysisIndex] ?? nextAnalysis.allTargetOptions.find(o => o.interval === 'R');
+        if (nextSelectedNote && nextSelectedNote.note !== currentSelectedNote?.note) {
+             notes.push({ note: nextSelectedNote.note, color: '#facc15', isBlinking: false }); // Yellow, static
+        }
+        
+        return notes;
+    }, [analysis, playerState, currentBeat, selectedNotes, cellToAnalysisIndexMap]);
+
+
+    const handleSelectNote = (analysisIndex, note) => {
+        setSelectedNotes(prev => ({ ...prev, [analysisIndex]: note }));
+    };
+
+    const loadPreset = () => {
+        const preset = PRESET_PROGRESSIONS[Math.floor(Math.random() * PRESET_PROGRESSIONS.length)];
+        const newChords = Array(TOTAL_CELLS).fill('');
+        preset.chords.forEach((c, i) => newChords[i] = c);
+        setChords(newChords);
+    };
+
+    const clearGrid = () => {
+        setChords(Array(TOTAL_CELLS).fill(''));
+        setAnalysis(null);
+    };
+
+    return (
+        <>
+            <div className="min-h-screen p-2 sm:p-4 pb-32">
+                <div className="w-full max-w-7xl mx-auto flex flex-col gap-4">
+                    <header className="flex justify-between items-center py-4">
+                        <div className="text-left">
+                            <h1 className="text-3xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-blue-500 mb-1">
+                                🎸 GIA Navigator
+                            </h1>
+                            <p className="text-md text-gray-400">Votre plan d'action visuel pour l'improvisation.</p>
+                        </div>
+                         <div className="flex items-center gap-4">
+                            {currentUser ? (
+                                <>
+                                    <div className="text-right">
+                                        <p className="text-sm text-gray-300 truncate">{currentUser.email}</p>
+                                        <button onClick={() => signOut(auth)} className="text-xs text-red-400 hover:underline">Déconnexion</button>
+                                    </div>
+                                    <UserIcon className="w-8 h-8 text-gray-400"/>
+                                </>
+                            ) : (
+                                <button onClick={() => setIsAuthModalOpen(true)} className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-gray-300 font-semibold py-2 px-4 rounded-lg transition">
+                                    <UserIcon className="w-5 h-5"/>
+                                    <span>Connexion / Inscription</span>
+                                </button>
+                            )}
+                        </div>
+                    </header>
+
+                    <main className="flex flex-col gap-4">
+                        <section className="p-4 bg-gray-900/50 rounded-xl border border-gray-800">
+                             <div className="flex justify-between items-center mb-4">
+                                <h2 className="text-lg font-bold text-white">1. Entrez votre grille (1 case = 2 temps)</h2>
+                                <div className="flex gap-2">
+                                    <button onClick={loadPreset} className="text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 font-semibold py-1.5 px-3 rounded-lg transition">🎲 Aléatoire</button>
+                                    <button onClick={clearGrid} className="text-xs bg-red-800/50 hover:bg-red-700 text-white font-semibold py-1.5 px-3 rounded-lg transition">🗑️ Vider</button>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-8 gap-1 mb-4">
+                                {chords.map((chord, i) => {
+                                    const currentCell = Math.floor(currentBeat / 2);
+                                    const isActive = playerState === PlayerState.Playing && i === currentCell;
+                                    return (
+                                        <input
+                                            key={i}
+                                            type="text"
+                                            value={chord}
+                                            onChange={(e) => handleChordChange(i, e.target.value)}
+                                            className={`w-full p-2 text-center font-bold text-white bg-gray-800 border border-gray-700 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all duration-150 ${
+                                                isActive ? 'ring-2 ring-blue-400 shadow-lg shadow-blue-400/20' : ''
+                                            }`}
+                                        />
+                                    );
+                                })}
+                            </div>
+
+                            <GuitarNeck highlightedNotes={getHighlightedNotes()} scaleNotes={analysis?.notesGamme} />
+                            
+                            <div className="mt-4 flex flex-col md:flex-row items-center justify-between gap-4 p-3 bg-gray-900 rounded-lg">
+                                <button onClick={handlePlayStop} disabled={playerState === PlayerState.CountingDown} className="w-full md:w-auto flex items-center justify-center gap-3 px-6 py-3 font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-500 transition-all duration-200 disabled:bg-gray-500 disabled:cursor-wait">
+                                    {playerState === PlayerState.Stopped && <PlayIcon className="w-6 h-6" />}
+                                    {playerState !== PlayerState.Stopped && <StopIcon className="w-6 h-6" />}
+                                    <span>{
+                                        playerState === PlayerState.Stopped ? 'Play' :
+                                        playerState === PlayerState.CountingDown ? `Décompte ${4 - (currentBeat * -1 - 1)}` :
+                                        'Stop'
+                                    }</span>
+                                </button>
+                                <div className="w-full md:w-auto flex items-center gap-3">
+                                    <label htmlFor="tempo" className="font-semibold text-gray-300">Tempo:</label>
+                                    <input type="range" id="tempo" min="40" max="200" value={tempo} onChange={e => setTempo(Number(e.target.value))} className="w-full"/>
+                                    <span className="w-16 text-center font-bold">{tempo} bpm</span>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section className="p-4 bg-gray-900/50 rounded-xl border border-gray-800">
+                             <h2 className="text-lg font-bold text-white mb-1">2. Votre Plan d'Action GIA</h2>
+                             {isLoading ? (
+                                <div className="flex items-center justify-center h-48 gap-3 text-gray-400">
+                                    <LoadingSpinner className="w-8 h-8"/>
+                                    <span>Analyse par IA en cours...</span>
+                                </div>
+                             ) : error ? (
+                                <div className="text-red-400 text-center h-48 flex items-center justify-center">{error}</div>
+                             ) : analysis ? (
+                                <>
+                                    <div className="flex items-baseline gap-4 mb-4">
+                                        <p className="font-semibold text-blue-300">Tonalité: {analysis.tonalite}</p>
+                                        <div className="flex gap-2 items-center text-sm text-gray-300 flex-wrap">
+                                            {analysis.notesGamme.map(n => <span key={n} className="font-mono bg-gray-700 px-1.5 py-0.5 rounded-md">{n}</span>)}
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-wrap -m-1">
+                                    {analysis.progressionAnalysis.map((item, index) => (
+                                        <AnalysisCard 
+                                            key={index}
+                                            analysis={item}
+                                            analysisIndex={index}
+                                            onSelectNote={(note) => handleSelectNote(index, note)}
+                                            selectedNote={selectedNotes[index]}
+                                        />
+                                    ))}
+                                    </div>
+                                </>
+                             ) : (
+                                 <div className="text-gray-500 text-center h-48 flex items-center justify-center">Entrez une grille d'accords pour commencer l'analyse.</div>
+                             )}
+                        </section>
+                    </main>
+                </div>
+            </div>
+            <GamificationDashboard data={gamificationData} />
+            <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
+        </>
+    );
+}
+
+// === RENDER LOGIC ===
+// Final step: render the App component into the DOM.
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+    throw new Error("Could not find root element to mount to");
+}
+
+const root = ReactDOM.createRoot(rootElement);
+root.render(
+    <React.StrictMode>
+        <App />
+    </React.StrictMode>
+);
+
     </script>
   </body>
 </html>
