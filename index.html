@@ -730,22 +730,28 @@ function App() {
     const [volumes, setVolumes] = useState({ metro: -12, bass: -6, chord: -14 });
     const [isYoutubePlaying, setIsYoutubePlaying] = useState(false);
     
+    // State for rendering the UI
     const [gamificationData, setGamificationData] = useState(INITIAL_GAMIFICATION_DATA);
+    // Ref for holding the latest data for async operations, preventing stale closures.
+    const gamificationDataRef = useRef(INITIAL_GAMIFICATION_DATA);
+    
     const [currentUser, setCurrentUser] = useState(null);
     const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
     const [saveStatus, setSaveStatus] = useState('idle'); // 'idle', 'saving', 'saved', 'error'
-
+    
+    const isSavingRef = useRef(false);
+    
     const synths = useRef({}).current;
     const transportPart = useRef(null);
     const countdownPart = useRef(null);
     const debouncedAnalysis = useRef(null);
     
-    const isSavingRef = useRef(false);
-    const gamificationDataRef = useRef(gamificationData);
-
-    useEffect(() => {
-      gamificationDataRef.current = gamificationData;
-    }, [gamificationData]);
+    // Custom state updater that syncs both the state (for re-renders) and the ref (for async logic)
+    const updateGamificationData = useCallback((updater) => {
+        const newValue = typeof updater === 'function' ? updater(gamificationDataRef.current) : updater;
+        gamificationDataRef.current = newValue;
+        setGamificationData(newValue);
+    }, []);
 
     const saveUserData = useCallback(async () => {
         if (!currentUser || isSavingRef.current) return;
@@ -753,14 +759,11 @@ function App() {
         isSavingRef.current = true;
         setSaveStatus('saving');
         
-        // Capture the data at the moment the save is initiated
-        const dataToSave = gamificationDataRef.current;
-
         try {
-            await setDoc(doc(db, 'users', currentUser.uid), dataToSave, { merge: true });
+            // The ref guarantees we are saving the absolute latest data.
+            await setDoc(doc(db, 'users', currentUser.uid), gamificationDataRef.current, { merge: true });
             setSaveStatus('saved');
             setTimeout(() => {
-                // Only reset to idle if no new save has started in the meantime
                  setSaveStatus(current => current === 'saved' ? 'idle' : current);
             }, 2000);
         } catch (error) {
@@ -778,30 +781,27 @@ function App() {
                 const userDocRef = doc(db, 'users', user.uid);
                 const userDoc = await getDoc(userDocRef);
                 if (userDoc.exists()) {
-                    setGamificationData(userDoc.data());
+                    updateGamificationData(userDoc.data());
                 } else {
                     await setDoc(doc(db, "users", user.uid), INITIAL_GAMIFICATION_DATA);
-                    setGamificationData(INITIAL_GAMIFICATION_DATA);
+                    updateGamificationData(INITIAL_GAMIFICATION_DATA);
                 }
             } else {
                 setCurrentUser(null);
-                setGamificationData(INITIAL_GAMIFICATION_DATA);
+                updateGamificationData(INITIAL_GAMIFICATION_DATA);
             }
         });
         return () => unsubscribe();
-    }, []);
+    }, [updateGamificationData]);
     
-    // Regular, interval-based saving to prevent data loss from debouncing issues.
+    // Regular, interval-based saving.
     useEffect(() => {
         if (!currentUser) return;
-
         const saveInterval = setInterval(() => {
             saveUserData();
-        }, 3000); // Save every 3 seconds
-
+        }, 3000);
         return () => clearInterval(saveInterval);
     }, [currentUser, saveUserData]);
-
 
     // Save on page exit/hide to prevent data loss
     useEffect(() => {
@@ -815,7 +815,6 @@ function App() {
             document.removeEventListener('visibilitychange', handleVisibilityChange);
         };
     }, [currentUser, saveUserData]);
-
 
     const handleChordChange = (index, value) => {
         const newChords = [...chords];
@@ -891,7 +890,7 @@ function App() {
         let timer;
         if (playerState === PlayerState.Playing || isYoutubePlaying) {
             timer = setInterval(() => {
-                setGamificationData(prev => {
+                updateGamificationData(prev => {
                     const newXp = prev.xp + GAMIFICATION_XP_PER_SECOND;
                     const newLevel = prev.level + Math.floor(newXp / GAMIFICATION_XP_PER_LEVEL);
                     return {
@@ -904,7 +903,7 @@ function App() {
             }, 1000);
         }
         return () => clearInterval(timer);
-    }, [playerState, isYoutubePlaying]);
+    }, [playerState, isYoutubePlaying, updateGamificationData]);
 
     const analysisByCell = useMemo(() => {
         if (!analysis) return [];
@@ -1117,14 +1116,11 @@ function App() {
     
     const handleLogout = useCallback(async () => {
         try {
-            // Perform one final, immediate save of the current state before signing out.
             if (currentUser) {
                 await saveUserData();
             }
-            // Sign the user out from Firebase.
             await signOut(auth);
         } catch (error) {
-            // Log any errors that occur during the process.
             console.error("Erreur lors de la déconnexion :", error);
         }
     }, [currentUser, saveUserData]);
@@ -1251,7 +1247,7 @@ function App() {
                 </div>
             </div>
             <GamificationDashboard data={gamificationData} />
-            <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} initialGamificationData={gamificationData} />
+            <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} initialGamificationData={gamificationDataRef.current} />
         </>
     );
 }
