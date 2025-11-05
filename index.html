@@ -755,20 +755,29 @@ function App() {
 
     const saveUserData = useCallback(async () => {
         if (!currentUser || isSavingRef.current) return;
-        
+
         isSavingRef.current = true;
         setSaveStatus('saving');
+
+        const saveDataPromise = setDoc(doc(db, 'users', currentUser.uid), gamificationDataRef.current, { merge: true });
         
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('La sauvegarde a expiré (timeout)')), 8000)
+        );
+
         try {
-            // The ref guarantees we are saving the absolute latest data.
-            await setDoc(doc(db, 'users', currentUser.uid), gamificationDataRef.current, { merge: true });
+            await Promise.race([saveDataPromise, timeoutPromise]);
+            
             setSaveStatus('saved');
             setTimeout(() => {
-                 setSaveStatus(current => current === 'saved' ? 'idle' : current);
+                setSaveStatus(current => (current === 'saved' ? 'idle' : current));
             }, 2000);
         } catch (error) {
-            console.error("Failed to save user data:", error);
+            console.error("Erreur de sauvegarde:", error);
             setSaveStatus('error');
+            setTimeout(() => {
+                setSaveStatus(current => (current === 'error' ? 'idle' : current));
+            }, 5000);
         } finally {
             isSavingRef.current = false;
         }
