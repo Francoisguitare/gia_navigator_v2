@@ -99,11 +99,18 @@ interface NotePosition {
   fret: number;
 }
 
+interface YoutubeTrack {
+    videoId: string;
+    title: string;
+    url: string;
+}
+
 interface GamificationData {
   xp: number;
   level: number;
   timePlayed: number; // in seconds
   firstName?: string;
+  recentTracks?: YoutubeTrack[];
 }
 
 const PlayerState = {
@@ -565,16 +572,39 @@ const AuthModal = ({ isOpen, onClose, initialGamificationData }) => {
 
 // === FROM App.tsx ===
 // Main application component and its sub-components
-const YoutubePlayer = ({ onPlaybackChange }) => {
+const YoutubePlayer = ({ onPlaybackChange, onTrackLoaded, recentTracks = [] }) => {
     const [urlInput, setUrlInput] = useState('');
     const [videoId, setVideoId] = useState(null);
+    const [isLoading, setIsLoading] = useState(false);
 
-    const handleLoadVideo = () => {
+    const fetchVideoTitle = async (id) => {
+        try {
+            // Using a CORS-friendly proxy for oEmbed
+            const response = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${id}`);
+            if (!response.ok) throw new Error('Failed to fetch video title');
+            const data = await response.json();
+            return data.title || 'Titre inconnu';
+        } catch (error) {
+            console.error(error);
+            return 'Titre inconnu';
+        }
+    };
+
+    const handleLoadVideo = async (urlToLoad) => {
+        const url = urlToLoad || urlInput;
         const youtubeRegex = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
-        const match = urlInput.match(youtubeRegex);
+        const match = url.match(youtubeRegex);
         const newVideoId = match ? match[1] : null;
+
         setVideoId(newVideoId);
         onPlaybackChange(!!newVideoId);
+
+        if (newVideoId) {
+            setIsLoading(true);
+            const title = await fetchVideoTitle(newVideoId);
+            onTrackLoaded({ videoId: newVideoId, title, url });
+            setIsLoading(false);
+        }
     };
     
     const handleClear = () => {
@@ -583,9 +613,14 @@ const YoutubePlayer = ({ onPlaybackChange }) => {
         onPlaybackChange(false);
     }
 
+    const handleRecentClick = (track) => {
+        setUrlInput(track.url);
+        handleLoadVideo(track.url);
+    };
+
     return (
         <div className="flex flex-col gap-3">
-             <div className="flex gap-2">
+             <div className="flex flex-col sm:flex-row gap-2">
                 <input
                     type="text"
                     value={urlInput}
@@ -593,11 +628,30 @@ const YoutubePlayer = ({ onPlaybackChange }) => {
                     placeholder="Collez une URL YouTube ici..."
                     className="w-full p-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
-                <button onClick={handleLoadVideo} className="bg-purple-600 hover:bg-purple-500 text-white font-semibold py-2 px-4 rounded-lg transition">Charger</button>
-                {videoId && <button onClick={handleClear} className="bg-red-800/50 hover:bg-red-700 text-white font-semibold py-2 px-3 rounded-lg transition">Vider</button>}
+                <div className="flex gap-2">
+                    <button onClick={() => handleLoadVideo()} disabled={isLoading} className="w-full sm:w-auto flex-1 bg-purple-600 hover:bg-purple-500 text-white font-semibold py-2 px-4 rounded-lg transition disabled:bg-gray-600 flex items-center justify-center">
+                        {isLoading ? <LoadingSpinner className="w-5 h-5"/> : 'Charger'}
+                    </button>
+                    {videoId && <button onClick={handleClear} className="bg-red-800/50 hover:bg-red-700 text-white font-semibold py-2 px-3 rounded-lg transition">Vider</button>}
+                </div>
             </div>
+             {recentTracks.length > 0 && (
+                <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-800">
+                    <span className="text-xs font-semibold text-gray-400 self-center">Récents:</span>
+                    {recentTracks.map(track => (
+                        <button
+                            key={track.videoId}
+                            onClick={() => handleRecentClick(track)}
+                            className="text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 py-1 px-2 rounded-md transition"
+                            title={track.title}
+                        >
+                            {track.title.length > 30 ? `${track.title.substring(0, 27)}...` : track.title}
+                        </button>
+                    ))}
+                </div>
+            )}
             {videoId && (
-                <div className="aspect-video w-full max-w-2xl mx-auto rounded-lg overflow-hidden border-2 border-gray-700">
+                <div className="aspect-video w-full max-w-2xl mx-auto rounded-lg overflow-hidden border-2 border-gray-700 mt-2">
                     <iframe
                         width="100%"
                         height="100%"
@@ -741,7 +795,7 @@ const SaveStatusIndicator = ({ status }) => {
     );
 };
 
-const INITIAL_GAMIFICATION_DATA = { xp: 0, level: 1, timePlayed: 0 };
+const INITIAL_GAMIFICATION_DATA = { xp: 0, level: 1, timePlayed: 0, recentTracks: [] };
 
 function App() {
     const [chords, setChords] = useState(Array(TOTAL_CELLS).fill(''));
@@ -798,7 +852,6 @@ function App() {
             
             setSaveStatus('saved');
             setTimeout(() => {
-                // Only reset if it's still 'saved', to avoid race condition with a new save starting
                 setSaveStatus(current => (current === 'saved' ? 'idle' : current));
             }, 2000);
         } catch (error) {
@@ -819,7 +872,12 @@ function App() {
                 const userDocRef = doc(db, 'users', user.uid);
                 const userDoc = await getDoc(userDocRef);
                 if (userDoc.exists()) {
-                    updateGamificationData(userDoc.data());
+                    // Ensure recentTracks is an array
+                    const data = userDoc.data();
+                    if (!data.recentTracks) {
+                        data.recentTracks = [];
+                    }
+                    updateGamificationData(data);
                 } else {
                     await setDoc(doc(db, "users", user.uid), INITIAL_GAMIFICATION_DATA);
                     updateGamificationData(INITIAL_GAMIFICATION_DATA);
@@ -1141,6 +1199,16 @@ function App() {
     const handleYoutubePlaybackChange = (isPlaying) => {
         setIsYoutubePlaying(isPlaying);
     };
+    
+    const handleTrackLoaded = (track) => {
+        updateGamificationData(prev => {
+            const existingTracks = prev.recentTracks || [];
+            // Remove if already exists to move it to the front
+            const filteredTracks = existingTracks.filter(t => t.videoId !== track.videoId);
+            const newTracks = [track, ...filteredTracks].slice(0, 5); // Keep last 5
+            return { ...prev, recentTracks: newTracks };
+        });
+    };
 
     const loadPreset = () => {
         const preset = PRESET_PROGRESSIONS[Math.floor(Math.random() * PRESET_PROGRESSIONS.length)];
@@ -1209,7 +1277,11 @@ function App() {
                     <main className="flex flex-col gap-4">
                         <section className="p-4 bg-gray-900/50 rounded-xl border border-gray-800">
                             <h2 className="text-lg font-bold text-white mb-4">1. Backing Track (Optionnel)</h2>
-                            <YoutubePlayer onPlaybackChange={handleYoutubePlaybackChange} />
+                            <YoutubePlayer 
+                                onPlaybackChange={handleYoutubePlaybackChange}
+                                onTrackLoaded={handleTrackLoaded}
+                                recentTracks={gamificationData.recentTracks || []}
+                            />
                         </section>
                     
                         <section className="p-4 bg-gray-900/50 rounded-xl border border-gray-800">
