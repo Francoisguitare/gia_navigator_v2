@@ -37,7 +37,6 @@
     "react": "https://aistudiocdn.com/react@^19.2.0",
     "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
     "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.28.0",
     "tone": "https://aistudiocdn.com/tone@^15.1.22",
     "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
     "firebase/auth": "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js",
@@ -71,7 +70,6 @@ if (typeof process === 'undefined') {
 // === IMPORTS (Libraries) ===
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
-import { GoogleGenAI, Type } from "@google/genai";
 import { MonoSynth, PolySynth, Synth, MembraneSynth, Part, Transport, Draw, context, start } from 'tone';
 import { initializeApp } from "firebase/app";
 import { getAuth, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
@@ -80,29 +78,6 @@ import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
 
 // === FROM types.ts ===
 // Interfaces and Enums are defined here directly
-interface TargetNote {
-  note: string;
-  interval: string;
-  intention: string;
-  description: string;
-  type: 'fondatrice' | 'expressive';
-}
-
-interface ChordAnalysis {
-  accord: string;
-  degre: string;
-  front: 'TENSION' | 'RÉSOLUTION' | 'HORS TONALITÉ';
-  actionRythmique: 'RAPIDE / AGRESSIF' | 'LENT / LYRIQUE';
-  notes: string[];
-  allTargetOptions: TargetNote[];
-}
-
-interface FullAnalysis {
-  tonalite: string;
-  notesGamme: string[];
-  progressionAnalysis: ChordAnalysis[];
-}
-
 interface NotePosition {
   note: string;
   string: number;
@@ -188,12 +163,6 @@ const LoadingSpinner = ({ className }) => (
   </svg>
 );
 
-const TrophyIcon = ({ className }) => (
-    <svg xmlns="http://www.w3.org/2000/svg" className={className} viewBox="0 0 24 24" fill="currentColor">
-        <path d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94c.63 1.5 1.98 2.63 3.61 2.96V19H7v2h10v-2h-4v-3.1c1.63-.33 2.98-1.46 3.61-2.96C19.08 12.63 21 10.55 21 8V7c0 -1.1-.9-2-2-2zm-7 6c-1.66 0-3-1.34-3-3V7h6v1c0 1.66-1.34 3-3 3z" />
-    </svg>
-);
-
 const ClockIcon = ({ className }) => (
     <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
@@ -225,112 +194,6 @@ const ExclamationTriangleIcon = ({ className }) => (
 );
 
 
-// === FROM services/geminiService.ts ===
-// Gemini API service functions
-let ai = null;
-let isAiInitialized = false;
-
-const initializeAi = () => {
-    if (isAiInitialized) return !!ai;
-    const apiKey = process.env.API_KEY;
-    if (apiKey) {
-        try {
-            ai = new GoogleGenAI({ apiKey });
-            isAiInitialized = true;
-            return true;
-        } catch (e) {
-            console.error("Error initializing GoogleGenAI, likely missing API Key.", e);
-            ai = null;
-            isAiInitialized = true;
-            return false;
-        }
-    }
-    isAiInitialized = true;
-    return false;
-};
-
-const analyzeProgressionWithGemini = async (progression) => {
-    if (!ai) {
-        console.warn("Gemini AI service not initialized (API_KEY missing). Using mock data.");
-        return {
-            tonalite: "C Majeur (Démo)",
-            notesGamme: ["C", "D", "E", "F", "G", "A", "B"],
-            progressionAnalysis: progression.filter(c => c).map((c, i) => ({
-                accord: c,
-                degre: ["I", "V", "vi", "IV"][i % 4],
-                notes: [c.charAt(0), "E", "G"],
-                front: "RÉSOLUTION",
-                actionRythmique: "LENT / LYRIQUE",
-                allTargetOptions: [
-                    { note: c.charAt(0), interval: "R", intention: "Stabilité", description: "", type: "fondatrice" },
-                    { note: "E", interval: "3M", intention: "Couleur", description: "", type: "fondatrice" },
-                    { note: "D", interval: "9e", intention: "Lyrisme", description: "", type: "expressive" },
-                ]
-            }))
-        };
-    }
-
-    const prompt = `Analyse la progression d'accords suivante pour un guitariste improvisateur: ${progression.join(' ')}.
-    1. Détermine la tonalité la plus probable (ex: "C Majeur", "A mineur").
-    2. Liste les notes de la gamme correspondante.
-    3. Pour chaque accord de la progression (ignore les cases vides), fournis une analyse détaillée.
-    - accord: Le nom de l'accord.
-    - degre: Le degré de l'accord dans la tonalité (ex: "I", "V7", "vi").
-    - notes: La liste des notes qui composent l'accord (ex: ["C", "E", "G"]).
-    - front: Classifie l'accord comme "RÉSOLUTION" (stable), "TENSION" (dominant, veut résoudre), ou "HORS TONALITÉ" (inattendu, crée une surprise).
-    - actionRythmique: Suggère une approche rythmique: "LENT / LYRIQUE" pour la résolution, "RAPIDE / AGRESSIF" pour la tension.
-    - allTargetOptions: Propose des notes cibles pour l'improvisation, en incluant des notes fondatrices (R, 3, 5, 7) et des notes expressives (9, 11, 13, altérations), avec une brève description de leur "intention" (ex: "Stabilité", "Couleur", "Tension Ultime").
-    
-    Réponds avec un objet JSON valide et rien d'autre. N'ajoute pas de démarqueurs de code comme \`\`\`json.`;
-
-    try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt
-        });
-
-        let jsonText = response.text.trim();
-        if (jsonText.startsWith('```json')) {
-            jsonText = jsonText.substring(7, jsonText.length - 3).trim();
-        }
-        const result = JSON.parse(jsonText);
-        return result;
-
-    } catch (error) {
-        console.error("Error calling Gemini API for progression analysis:", error);
-        throw new Error("L'analyse IA a échoué.");
-    }
-};
-
-const extractChordsFromVideoWithGemini = async (videoTitle) => {
-    if (!ai) {
-        console.warn("Gemini AI service not initialized (API_KEY missing). Using mock data.");
-        // We return an empty array here to indicate failure to the user,
-        // rather than confusing them with the same mock chords every time.
-        return [];
-    }
-
-    const prompt = `Basé sur le titre suivant d'une vidéo YouTube (qui est probablement un backing track), agis comme un musicien expert et extrais la progression d'accords. Titre: "${videoTitle}". Réponds UNIQUEMENT avec la liste des accords séparés par une virgule (par exemple: Am,G,C,F). Ne mets pas d'espaces. Si tu ne trouves pas d'accords clairs, retourne une chaîne vide.`;
-
-    try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt
-        });
-
-        const textResponse = response.text.trim();
-        if (textResponse) {
-            return textResponse.split(',').filter(c => c);
-        }
-        return [];
-
-    } catch (error) {
-        console.error("Error calling Gemini API for chord extraction:", error);
-        throw new Error("L'extraction des accords a échoué.");
-    }
-};
-
-
 // === FROM components/GuitarNeck.tsx ===
 // GuitarNeck component and helpers
 const calculateNotePositions = () => {
@@ -358,7 +221,7 @@ const calculateNotePositions = () => {
 
 const notePositions = calculateNotePositions();
 
-const GuitarNeck = ({ highlightedNotes, scaleNotes = [] }) => {
+const GuitarNeck = ({ highlightedNotes }) => {
   const neckRef = React.useRef(null);
   const [isMounted, setIsMounted] = useState(false);
 
@@ -380,18 +243,6 @@ const GuitarNeck = ({ highlightedNotes, scaleNotes = [] }) => {
         : neckDimensions.nutWidth + ((fret - 0.5) * (neckDimensions.getNeckWidth() / NUM_FRETS));
     return { x, y };
   };
-
-  const scaleNoteElements = useMemo(() => {
-    if (!Array.isArray(scaleNotes)) return [];
-    return scaleNotes.flatMap(note =>
-      notePositions
-        .filter(p => p.note === note && p.fret > 0)
-        .map(p => {
-          const { x, y } = getNoteCoordinates(p.string, p.fret);
-          return <circle key={`${note}-${p.string}-${p.fret}`} cx={x} cy={y} r={10} fill="none" stroke="#4b5563" strokeWidth="1.5" opacity="0.4" />;
-        })
-    );
-  }, [scaleNotes]);
 
   const highlightedNoteElements = useMemo(() => {
     if (!Array.isArray(highlightedNotes)) return [];
@@ -426,8 +277,6 @@ const GuitarNeck = ({ highlightedNotes, scaleNotes = [] }) => {
       <svg ref={neckRef} width="100%" height={neckDimensions.height + 20} className="min-w-[800px]">
         <rect x="0" y="0" width="100%" height={neckDimensions.height} fill="#1f2937" rx="8" />
         
-        <g id="scale-notes">{scaleNoteElements}</g>
-
         {/* Frets and Strings */}
         {Array.from({ length: 6 }).map((_, i) => (
           <line
@@ -629,7 +478,7 @@ const AuthModal = ({ isOpen, onClose, initialGamificationData }) => {
 
 // === FROM App.tsx ===
 // Main application component and its sub-components
-const YoutubePlayer = ({ onPlaybackChange, onTrackLoaded, recentTracks = [], onAnalyzeVideo, isAnalyzingVideo, isAiAvailable }) => {
+const YoutubePlayer = ({ onPlaybackChange, onTrackLoaded, recentTracks = [] }) => {
     const [urlInput, setUrlInput] = useState('');
     const [videoId, setVideoId] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
@@ -737,12 +586,9 @@ const YoutubePlayer = ({ onPlaybackChange, onTrackLoaded, recentTracks = [], onA
                     className="w-full p-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
                 <div className="flex gap-2">
-                    <button onClick={() => handleLoadVideo()} disabled={isLoading || isAnalyzingVideo} className="w-full sm:w-auto flex-1 bg-purple-600 hover:bg-purple-500 text-white font-semibold py-2 px-4 rounded-lg transition disabled:bg-gray-600 flex items-center justify-center">
+                    <button onClick={() => handleLoadVideo()} disabled={isLoading} className="w-full sm:w-auto flex-1 bg-purple-600 hover:bg-purple-500 text-white font-semibold py-2 px-4 rounded-lg transition disabled:bg-gray-600 flex items-center justify-center">
                         {isLoading ? <LoadingSpinner className="w-5 h-5"/> : 'Charger'}
                     </button>
-                    {videoId && <button onClick={onAnalyzeVideo} disabled={isAnalyzingVideo || isLoading || !isAiAvailable} className="w-full sm:w-auto flex-1 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-4 rounded-lg transition disabled:bg-gray-600 disabled:cursor-not-allowed flex items-center justify-center" title={!isAiAvailable ? "Fonctionnalité IA non disponible" : "Analyser la vidéo"}>
-                        {isAnalyzingVideo ? <LoadingSpinner className="w-5 h-5"/> : 'Analyser'}
-                    </button>}
                     {videoId && <button onClick={handleClear} className="bg-red-800/50 hover:bg-red-700 text-white font-semibold py-2 px-3 rounded-lg transition">Vider</button>}
                 </div>
             </div>
@@ -823,55 +669,6 @@ const GamificationDashboard = ({ data }) => {
     );
 };
 
-const AnalysisCard = ({ analysis, analysisIndex, onSelectNote, selectedNote }) => {
-    if (!analysis) return null;
-    const frontStyles = {
-        'RÉSOLUTION': 'border-blue-500/50 bg-blue-500/10',
-        'TENSION': 'border-red-500/50 bg-red-500/10',
-        'HORS TONALITÉ': 'border-yellow-500/50 bg-yellow-500/10'
-    };
-    
-    const badgeStyles = {
-        'RÉSOLUTION': 'bg-blue-500 text-blue-50',
-        'TENSION': 'bg-red-500 text-red-50',
-        'HORS TONALITÉ': 'bg-yellow-500 text-yellow-50'
-    };
-    
-    return (
-        <div className={`p-1 w-full sm:w-1/2 md:w-1/3 lg:w-1/4`}>
-            <div className={`h-full rounded-lg border-2 p-3 flex flex-col space-y-3 ${frontStyles[analysis.front]}`}>
-                <div className="flex justify-between items-start">
-                    <h3 className="text-xl font-extrabold text-white">{analysis.accord} <span className="text-base font-semibold text-gray-400">{analysis.degre}</span></h3>
-                    <span className={`px-2 py-0.5 text-xs font-semibold rounded-full ${badgeStyles[analysis.front]}`}>{analysis.front}</span>
-                </div>
-                <p className="text-xs font-semibold text-gray-400">{analysis.actionRythmique}</p>
-                
-                <div>
-                    <p className="text-xs font-bold tracking-wider text-purple-400 mb-2">NOTE CIBLE</p>
-                    <div className="space-y-1.5">
-                        {analysis.allTargetOptions && analysis.allTargetOptions.map((item, index) => {
-                            const isSelected = selectedNote?.note === item.note && selectedNote?.interval === item.interval;
-                            return (
-                                <button
-                                    key={index}
-                                    onClick={() => onSelectNote(item)}
-                                    className={`w-full text-left p-2 rounded-md text-sm transition-all duration-200 ${
-                                        isSelected
-                                            ? 'bg-purple-500 text-white shadow-lg'
-                                            : 'bg-gray-700/50 hover:bg-gray-600/50'
-                                    }`}
-                                >
-                                    <span className="font-bold">{item.note} ({item.interval})</span> - <span className="text-gray-300">{item.intention}</span>
-                                </button>
-                            );
-                        })}
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-};
-
 const SaveStatusIndicator = ({ status }) => {
     const statusMap = {
         saving: {
@@ -901,13 +698,15 @@ const SaveStatusIndicator = ({ status }) => {
 
 const INITIAL_GAMIFICATION_DATA = { xp: 0, level: 1, timePlayed: 0, recentTracks: [] };
 
+const getRootNote = (chord) => {
+    if (!chord) return null;
+    const match = chord.match(/^[A-G][#b]?/);
+    return match ? match[0] : null;
+};
+
 function App() {
     const [chords, setChords] = useState(Array(TOTAL_CELLS).fill(''));
-    const [analysis, setAnalysis] = useState(null);
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState(null);
-    const [selectedNotes, setSelectedNotes] = useState({});
-
+    
     const [playerState, setPlayerState] = useState(PlayerState.Stopped);
     const [currentBeat, setCurrentBeat] = useState(-1);
     const [tempo, setTempo] = useState(60);
@@ -922,19 +721,11 @@ function App() {
     const [saveStatus, setSaveStatus] = useState('idle');
     
     const [currentTrack, setCurrentTrack] = useState(null);
-    const [isAnalyzingVideo, setIsAnalyzingVideo] = useState(false);
-    
-    const [isAiAvailable, setIsAiAvailable] = useState(false);
     
     const isSavingRef = useRef(false);
     const synths = useRef({}).current;
     const transportPart = useRef(null);
     const countdownPart = useRef(null);
-    const debouncedAnalysis = useRef(null);
-    
-    useEffect(() => {
-        setIsAiAvailable(initializeAi());
-    }, []);
     
     const updateGamificationData = useCallback((updater) => {
         const newValue = typeof updater === 'function' ? updater(gamificationDataRef.current) : updater;
@@ -1007,44 +798,6 @@ function App() {
         setChords(newChords);
     };
 
-    const triggerAnalysis = useCallback(() => {
-        if (debouncedAnalysis.current) clearTimeout(debouncedAnalysis.current);
-        debouncedAnalysis.current = setTimeout(async () => {
-            const activeChords = chords.filter(c => c.trim() !== '');
-            if (activeChords.length === 0) {
-                setAnalysis(null);
-                return;
-            }
-            setIsLoading(true);
-            setError(null);
-            try {
-                const result = await analyzeProgressionWithGemini(chords);
-                if (result && Array.isArray(result.progressionAnalysis) && result.progressionAnalysis.length > 0) {
-                    setAnalysis(result);
-                    const defaultNotes = {};
-                    result.progressionAnalysis.forEach((chordAnalysis, index) => {
-                        const rootNote = chordAnalysis?.allTargetOptions?.find(opt => opt.interval === 'R');
-                        if(rootNote) defaultNotes[index] = rootNote;
-                    });
-                    setSelectedNotes(defaultNotes);
-                } else {
-                    setError("L'analyse IA a retourné une réponse invalide ou vide.");
-                    setAnalysis(null);
-                    console.error("Invalid or empty analysis from Gemini:", result);
-                }
-            } catch (e) {
-                setError(e.message || "Failed to analyze progression.");
-                console.error(e);
-            } finally {
-                setIsLoading(false);
-            }
-        }, 1000);
-    }, [chords]);
-    
-    useEffect(() => {
-        triggerAnalysis();
-    }, [chords, triggerAnalysis]);
-
     useEffect(() => {
         synths.bass = new MonoSynth().toDestination();
         synths.bass.set({ oscillator: { type: 'fatsawtooth' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.5 } });
@@ -1084,34 +837,6 @@ function App() {
         return () => clearInterval(timer);
     }, [playerState, isYoutubePlaying, updateGamificationData]);
 
-    const analysisByCell = useMemo(() => {
-        if (!analysis || !Array.isArray(analysis.progressionAnalysis)) return [];
-        const result = Array(TOTAL_CELLS).fill(undefined);
-        let analysisIndex = 0;
-        chords.forEach((chord, cellIndex) => {
-            if (chord.trim() !== '' && analysis.progressionAnalysis[analysisIndex]) {
-                result[cellIndex] = analysis.progressionAnalysis[analysisIndex];
-                analysisIndex++;
-            }
-        });
-        return result;
-    }, [analysis, chords]);
-
-    const cellToAnalysisIndexMap = useMemo(() => {
-        if (!analysis || !Array.isArray(analysis.progressionAnalysis)) return {};
-        const map = {};
-        let analysisIndex = 0;
-        chords.forEach((chord, cellIndex) => {
-            if (chord.trim() !== '') {
-                if (analysis.progressionAnalysis[analysisIndex]) {
-                    map[cellIndex] = analysisIndex;
-                    analysisIndex++;
-                }
-            }
-        });
-        return map;
-    }, [analysis, chords]);
-
     const stopPlayback = useCallback(() => {
         Transport.stop();
         Transport.cancel(0);
@@ -1140,8 +865,7 @@ function App() {
             events.push({ time, note: i % 4 === 0 ? 'C5' : 'C4', type: 'metro' });
             if(i % 2 === 0 && chordMap.has(cellIndex)) {
                 const chordName = chordMap.get(cellIndex);
-                const rootNote = chordName.match(/^[A-G][#b]?/)?.[0];
-                const chordAnalysis = analysisByCell[cellIndex];
+                const rootNote = getRootNote(chordName);
                 if(rootNote) {
                     let nextChangeBeat = totalBeatsInProgression;
                     for(let j=cellIndex+1; j <= lastChordCellIndex; j++) {
@@ -1150,9 +874,6 @@ function App() {
                     const durationBeats = nextChangeBeat - i;
                     const duration = `0:${durationBeats}`;
                     events.push({ time, note: rootNote + '2', duration, type: 'bass' });
-                    if (chordAnalysis?.notes?.length > 0) {
-                        events.push({ time, notes: chordAnalysis.notes.map(n => n+'4'), duration, type: 'chord' });
-                    }
                 }
             }
         }
@@ -1174,7 +895,7 @@ function App() {
         Transport.scheduleOnce(() => setPlayerState(PlayerState.Playing), '1m');
         Transport.start();
         setPlayerState(PlayerState.CountingDown);
-    }, [chords, synths, analysisByCell]);
+    }, [chords, synths]);
 
     const handlePlayStop = async () => {
         if (context.state !== 'running') await start();
@@ -1183,51 +904,36 @@ function App() {
     };
 
     const getHighlightedNotes = useCallback(() => {
-        if (!analysis?.progressionAnalysis?.length) return [];
-        const firstAnalysisIndex = cellToAnalysisIndexMap[Object.keys(cellToAnalysisIndexMap)[0]];
-        if (firstAnalysisIndex === undefined) return [];
+        if (playerState === PlayerState.Stopped) return [];
 
-        if (playerState === PlayerState.Stopped) {
-            const firstAnalysis = analysis.progressionAnalysis[firstAnalysisIndex];
-            const selectedNote = selectedNotes[firstAnalysisIndex] ?? firstAnalysis?.allTargetOptions?.find(o => o.interval === 'R');
-            return selectedNote ? [{ note: selectedNote.note, color: '#a855f7', isBlinking: false }] : [];
-        }
+        const activeChordsWithIndices = chords
+            .map((c, i) => ({ chord: c, index: i }))
+            .filter(item => item.chord.trim() !== '');
+
+        if (activeChordsWithIndices.length === 0) return [];
+
+        const firstChord = activeChordsWithIndices[0].chord;
+        const firstRoot = getRootNote(firstChord);
+        
         if (playerState === PlayerState.CountingDown) {
-            const firstAnalysis = analysis.progressionAnalysis[firstAnalysisIndex];
-            const selectedNote = selectedNotes[firstAnalysisIndex] ?? firstAnalysis?.allTargetOptions?.find(o => o.interval === 'R');
-            return selectedNote ? [{ note: selectedNote.note, color: '#facc15', isBlinking: false }] : [];
+            return firstRoot ? [{ note: firstRoot, color: '#facc15', isBlinking: false }] : [];
         }
-        const currentCellIndex = Math.floor(currentBeat / 2);
-        let currentAnalysisIndex = -1;
-        for (let i = currentCellIndex; i >= 0; i--) {
-            if (cellToAnalysisIndexMap[i] !== undefined) { currentAnalysisIndex = cellToAnalysisIndexMap[i]; break; }
-        }
-        if (currentAnalysisIndex === -1) return [];
-        let nextAnalysisIndex = -1;
-        for (let i = currentCellIndex + 1; i < TOTAL_CELLS; i++) {
-             if (cellToAnalysisIndexMap[i] !== undefined) { nextAnalysisIndex = cellToAnalysisIndexMap[i]; break; }
-        }
-        if (nextAnalysisIndex === -1) { 
-            const firstCellWithChord = Object.keys(cellToAnalysisIndexMap).map(Number).sort((a, b) => a-b)[0];
-            nextAnalysisIndex = cellToAnalysisIndexMap[firstCellWithChord];
-        }
-        if (nextAnalysisIndex === undefined) return [];
-        const currentAnalysis = analysis.progressionAnalysis[currentAnalysisIndex];
-        const nextAnalysis = analysis.progressionAnalysis[nextAnalysisIndex];
-        if (!currentAnalysis || !nextAnalysis) return [];
-        const notes = [];
-        const currentSelectedNote = selectedNotes[currentAnalysisIndex] ?? currentAnalysis.allTargetOptions?.find(o => o.interval === 'R');
-        if (currentSelectedNote) notes.push({ note: currentSelectedNote.note, color: '#a855f7', isBlinking: true });
-        const nextSelectedNote = selectedNotes[nextAnalysisIndex] ?? nextAnalysis.allTargetOptions?.find(o => o.interval === 'R');
-        if (nextSelectedNote && nextSelectedNote.note !== currentSelectedNote?.note) {
-             notes.push({ note: nextSelectedNote.note, color: '#facc15', isBlinking: false });
-        }
-        return notes;
-    }, [analysis, playerState, currentBeat, selectedNotes, cellToAnalysisIndexMap]);
 
-    const handleSelectNote = (analysisIndex, note) => {
-        setSelectedNotes(prev => ({ ...prev, [analysisIndex]: note }));
-    };
+        const currentCellIndex = Math.floor(currentBeat / 2);
+        let currentChord = null;
+        for (let i = currentCellIndex; i >= 0; i--) {
+            const chordAtIndex = chords[i].trim();
+            if (chordAtIndex) {
+                currentChord = chordAtIndex;
+                break;
+            }
+        }
+        
+        if (!currentChord) return [];
+
+        const currentRoot = getRootNote(currentChord);
+        return currentRoot ? [{ note: currentRoot, color: '#a855f7', isBlinking: true }] : [];
+    }, [playerState, currentBeat, chords]);
     
     const handleYoutubePlaybackChange = (isPlaying) => setIsYoutubePlaying(isPlaying);
     
@@ -1241,36 +947,6 @@ function App() {
         });
     };
 
-    const handleAnalyzeVideo = async () => {
-        if (!currentTrack || !isAiAvailable) {
-             if(!isAiAvailable) setError("Fonctionnalité IA non disponible : Clé API manquante.");
-            return;
-        }
-        setIsAnalyzingVideo(true);
-        setError(null);
-        try {
-            const extractedChords = await extractChordsFromVideoWithGemini(currentTrack.title);
-            if (extractedChords && extractedChords.length > 0) {
-                const newChords = Array(TOTAL_CELLS).fill('');
-                let gridIndex = 0;
-                for (const chord of extractedChords) {
-                    if (gridIndex < TOTAL_CELLS) {
-                        newChords[gridIndex] = chord;
-                        gridIndex += 2;
-                    }
-                }
-                setChords(newChords);
-            } else {
-                setError("L'IA n'a pas pu trouver d'accords dans le titre de la vidéo.");
-            }
-        } catch (e) {
-            setError(e.message || "L'extraction des accords a échoué.");
-            console.error(e);
-        } finally {
-            setIsAnalyzingVideo(false);
-        }
-    };
-
     const loadPreset = () => {
         const preset = PRESET_PROGRESSIONS[Math.floor(Math.random() * PRESET_PROGRESSIONS.length)];
         const newChords = Array(TOTAL_CELLS).fill('');
@@ -1280,7 +956,6 @@ function App() {
 
     const clearGrid = () => {
         setChords(Array(TOTAL_CELLS).fill(''));
-        setAnalysis(null);
     };
     
     const handleLogout = useCallback(async () => {
@@ -1301,11 +976,6 @@ function App() {
         <>
             <div className="min-h-screen p-2 sm:p-4 pb-40">
                 <div className="w-full max-w-7xl mx-auto flex flex-col gap-4">
-                    {!isAiAvailable && (
-                        <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 text-sm rounded-lg p-3 text-center">
-                           <span className="font-bold">Mode Démo :</span> L'analyse IA est simulée (la clé API est manquante dans l'environnement).
-                        </div>
-                    )}
                     <header className="flex justify-between items-center py-4">
                         <div className="text-left">
                             <h1 className="text-3xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-blue-500 mb-1">
@@ -1345,9 +1015,6 @@ function App() {
                                 onPlaybackChange={handleYoutubePlaybackChange}
                                 onTrackLoaded={handleTrackLoaded}
                                 recentTracks={gamificationData.recentTracks}
-                                onAnalyzeVideo={handleAnalyzeVideo}
-                                isAnalyzingVideo={isAnalyzingVideo}
-                                isAiAvailable={isAiAvailable}
                             />
                         </section>
                     
@@ -1378,7 +1045,7 @@ function App() {
                                 })}
                             </div>
 
-                            <GuitarNeck highlightedNotes={getHighlightedNotes()} scaleNotes={analysis?.notesGamme} />
+                            <GuitarNeck highlightedNotes={getHighlightedNotes()} />
                             
                             <div className="mt-4 flex flex-col md:flex-row items-center justify-between gap-4 p-3 bg-gray-900 rounded-lg">
                                 <button onClick={handlePlayStop} disabled={playerState === PlayerState.CountingDown} className="w-full md:w-auto flex items-center justify-center gap-3 px-6 py-3 font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-500 transition-all duration-200 disabled:bg-gray-500 disabled:cursor-wait">
@@ -1396,40 +1063,6 @@ function App() {
                                     <span className="w-16 text-center font-bold">{tempo} bpm</span>
                                 </div>
                             </div>
-                        </section>
-
-                        <section className="p-4 bg-gray-900/50 rounded-xl border border-gray-800">
-                             <h2 className="text-lg font-bold text-white mb-1">3. Votre Plan d'Action GIA</h2>
-                             {isLoading ? (
-                                <div className="flex items-center justify-center h-48 gap-3 text-gray-400">
-                                    <LoadingSpinner className="w-8 h-8"/>
-                                    <span>Analyse par IA en cours...</span>
-                                </div>
-                             ) : error ? (
-                                <div className="text-red-400 text-center h-48 flex items-center justify-center">{error}</div>
-                             ) : analysis ? (
-                                <>
-                                    <div className="flex items-baseline gap-4 mb-4">
-                                        <p className="font-semibold text-blue-300">Tonalité: {analysis.tonalite}</p>
-                                        <div className="flex gap-2 items-center text-sm text-gray-300 flex-wrap">
-                                            {analysis.notesGamme && analysis.notesGamme.map(n => <span key={n} className="font-mono bg-gray-700 px-1.5 py-0.5 rounded-md">{n}</span>)}
-                                        </div>
-                                    </div>
-                                    <div className="flex flex-wrap -m-1">
-                                    {analysis.progressionAnalysis && analysis.progressionAnalysis.map((item, index) => (
-                                        item && <AnalysisCard 
-                                            key={index}
-                                            analysis={item}
-                                            analysisIndex={index}
-                                            onSelectNote={(note) => handleSelectNote(index, note)}
-                                            selectedNote={selectedNotes[index]}
-                                        />
-                                    ))}
-                                    </div>
-                                </>
-                             ) : (
-                                 <div className="text-gray-500 text-center h-48 flex items-center justify-center">Entrez une grille d'accords pour commencer l'analyse.</div>
-                             )}
                         </section>
                     </main>
                 </div>
