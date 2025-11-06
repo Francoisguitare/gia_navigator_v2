@@ -58,6 +58,16 @@
       in memory, avoiding any network requests for .ts/.tsx files which were failing.
     -->
     <script type="text/babel" data-type="module">
+// Polyfill for 'process' in browser environment
+if (typeof process === 'undefined') {
+  window.process = {
+    env: {
+      API_KEY: undefined
+    }
+  };
+}
+
+
 // === IMPORTS (Libraries) ===
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
@@ -217,11 +227,21 @@ const ExclamationTriangleIcon = ({ className }) => (
 
 // === FROM services/geminiService.ts ===
 // Gemini API service functions
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+let ai = null;
+
+const initializeAi = () => {
+    if (ai) return true;
+    const apiKey = process.env.API_KEY;
+    if (apiKey) {
+        ai = new GoogleGenAI({ apiKey });
+        return true;
+    }
+    return false;
+};
 
 const analyzeProgressionWithGemini = async (progression) => {
-    if (!process.env.API_KEY) {
-        console.error("API_KEY environment variable not set.");
+    if (!initializeAi()) {
+        console.warn("Gemini AI service not initialized (API_KEY missing). Using mock data.");
         // Return mock data for development without API key
         return {
             tonalite: "C Majeur",
@@ -269,13 +289,13 @@ const analyzeProgressionWithGemini = async (progression) => {
 
     } catch (error) {
         console.error("Error calling Gemini API for progression analysis:", error);
-        return null;
+        throw new Error("L'analyse IA a échoué.");
     }
 };
 
 const extractChordsFromVideoWithGemini = async (videoTitle) => {
-    if (!process.env.API_KEY) {
-        console.error("API_KEY environment variable not set.");
+    if (!initializeAi()) {
+        console.warn("Gemini AI service not initialized (API_KEY missing). Using mock data.");
         return ['Am', 'G', 'C', 'F']; // Mock data
     }
 
@@ -295,7 +315,7 @@ const extractChordsFromVideoWithGemini = async (videoTitle) => {
 
     } catch (error) {
         console.error("Error calling Gemini API for chord extraction:", error);
-        return null;
+        throw new Error("L'extraction des accords a échoué.");
     }
 };
 
@@ -354,6 +374,7 @@ const GuitarNeck = ({ highlightedNotes, scaleNotes = [] }) => {
   };
 
   const scaleNoteElements = useMemo(() => {
+    if (!Array.isArray(scaleNotes)) return [];
     return scaleNotes.flatMap(note =>
       notePositions
         .filter(p => p.note === note && p.fret > 0)
@@ -365,6 +386,7 @@ const GuitarNeck = ({ highlightedNotes, scaleNotes = [] }) => {
   }, [scaleNotes]);
 
   const highlightedNoteElements = useMemo(() => {
+    if (!Array.isArray(highlightedNotes)) return [];
     return highlightedNotes.flatMap(hNote =>
       notePositions
         .filter(p => p.note === hNote.note && p.fret > 0)
@@ -664,7 +686,7 @@ const YoutubePlayer = ({ onPlaybackChange, onTrackLoaded, recentTracks = [], onA
                     {videoId && <button onClick={handleClear} className="bg-red-800/50 hover:bg-red-700 text-white font-semibold py-2 px-3 rounded-lg transition">Vider</button>}
                 </div>
             </div>
-             {recentTracks.length > 0 && (
+             {Array.isArray(recentTracks) && recentTracks.length > 0 && (
                 <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-800">
                     <span className="text-xs font-semibold text-gray-400 self-center">Récents:</span>
                     {recentTracks.map(track => (
@@ -750,6 +772,7 @@ const GamificationDashboard = ({ data }) => {
 };
 
 const AnalysisCard = ({ analysis, analysisIndex, onSelectNote, selectedNote }) => {
+    if (!analysis) return null;
     const frontStyles = {
         'RÉSOLUTION': 'border-blue-500/50 bg-blue-500/10',
         'TENSION': 'border-red-500/50 bg-red-500/10',
@@ -774,7 +797,7 @@ const AnalysisCard = ({ analysis, analysisIndex, onSelectNote, selectedNote }) =
                 <div>
                     <p className="text-xs font-bold tracking-wider text-purple-400 mb-2">NOTE CIBLE</p>
                     <div className="space-y-1.5">
-                        {analysis.allTargetOptions.map((item, index) => {
+                        {analysis.allTargetOptions && analysis.allTargetOptions.map((item, index) => {
                             const isSelected = selectedNote?.note === item.note && selectedNote?.interval === item.interval;
                             return (
                                 <button
@@ -952,7 +975,7 @@ function App() {
                     console.error("Invalid or empty analysis from Gemini:", result);
                 }
             } catch (e) {
-                setError("Failed to analyze progression.");
+                setError(e.message || "Failed to analyze progression.");
                 console.error(e);
             } finally {
                 setIsLoading(false);
@@ -1103,16 +1126,15 @@ function App() {
 
     const getHighlightedNotes = useCallback(() => {
         if (!analysis?.progressionAnalysis?.length) return [];
+        const firstAnalysisIndex = cellToAnalysisIndexMap[Object.keys(cellToAnalysisIndexMap)[0]];
+        if (firstAnalysisIndex === undefined) return [];
+
         if (playerState === PlayerState.Stopped) {
-            const firstAnalysisIndex = cellToAnalysisIndexMap[Object.keys(cellToAnalysisIndexMap)[0]];
-            if (firstAnalysisIndex === undefined) return [];
             const firstAnalysis = analysis.progressionAnalysis[firstAnalysisIndex];
             const selectedNote = selectedNotes[firstAnalysisIndex] ?? firstAnalysis?.allTargetOptions?.find(o => o.interval === 'R');
             return selectedNote ? [{ note: selectedNote.note, color: '#a855f7', isBlinking: false }] : [];
         }
         if (playerState === PlayerState.CountingDown) {
-            const firstAnalysisIndex = cellToAnalysisIndexMap[Object.keys(cellToAnalysisIndexMap)[0]];
-            if (firstAnalysisIndex === undefined) return [];
             const firstAnalysis = analysis.progressionAnalysis[firstAnalysisIndex];
             const selectedNote = selectedNotes[firstAnalysisIndex] ?? firstAnalysis?.allTargetOptions?.find(o => o.interval === 'R');
             return selectedNote ? [{ note: selectedNote.note, color: '#facc15', isBlinking: false }] : [];
@@ -1181,7 +1203,7 @@ function App() {
                 setError("L'IA n'a pas pu trouver d'accords dans le titre de la vidéo.");
             }
         } catch (e) {
-            setError("L'extraction des accords a échoué.");
+            setError(e.message || "L'extraction des accords a échoué.");
             console.error(e);
         } finally {
             setIsAnalyzingVideo(false);
@@ -1256,7 +1278,7 @@ function App() {
                             <YoutubePlayer 
                                 onPlaybackChange={handleYoutubePlaybackChange}
                                 onTrackLoaded={handleTrackLoaded}
-                                recentTracks={gamificationData.recentTracks || []}
+                                recentTracks={gamificationData.recentTracks}
                                 onAnalyzeVideo={handleAnalyzeVideo}
                                 isAnalyzingVideo={isAnalyzingVideo}
                             />
