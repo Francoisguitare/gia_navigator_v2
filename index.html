@@ -190,7 +190,7 @@ const LoadingSpinner = ({ className }) => (
 
 const TrophyIcon = ({ className }) => (
     <svg xmlns="http://www.w3.org/2000/svg" className={className} viewBox="0 0 24 24" fill="currentColor">
-        <path d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94c.63 1.5 1.98 2.63 3.61 2.96V19H7v2h10v-2h-4v-3.1c1.63-.33 2.98-1.46 3.61-2.96C19.08 12.63 21 10.55 21 8V7c0-1.1-.9-2-2-2zm-7 6c-1.66 0-3-1.34-3-3V7h6v1c0 1.66-1.34 3-3 3z" />
+        <path d="M19 5h-2V3H7v2H5c-1.1 0-2 .9-2 2v1c0 2.55 1.92 4.63 4.39 4.94c.63 1.5 1.98 2.63 3.61 2.96V19H7v2h10v-2h-4v-3.1c1.63-.33 2.98-1.46 3.61-2.96C19.08 12.63 21 10.55 21 8V7c0 -1.1-.9-2-2-2zm-7 6c-1.66 0-3-1.34-3-3V7h6v1c0 1.66-1.34 3-3 3z" />
     </svg>
 );
 
@@ -228,23 +228,32 @@ const ExclamationTriangleIcon = ({ className }) => (
 // === FROM services/geminiService.ts ===
 // Gemini API service functions
 let ai = null;
+let isAiInitialized = false;
 
 const initializeAi = () => {
-    if (ai) return true;
+    if (isAiInitialized) return !!ai;
     const apiKey = process.env.API_KEY;
     if (apiKey) {
-        ai = new GoogleGenAI({ apiKey });
-        return true;
+        try {
+            ai = new GoogleGenAI({ apiKey });
+            isAiInitialized = true;
+            return true;
+        } catch (e) {
+            console.error("Error initializing GoogleGenAI, likely missing API Key.", e);
+            ai = null;
+            isAiInitialized = true;
+            return false;
+        }
     }
+    isAiInitialized = true;
     return false;
 };
 
 const analyzeProgressionWithGemini = async (progression) => {
-    if (!initializeAi()) {
+    if (!ai) {
         console.warn("Gemini AI service not initialized (API_KEY missing). Using mock data.");
-        // Return mock data for development without API key
         return {
-            tonalite: "C Majeur",
+            tonalite: "C Majeur (Démo)",
             notesGamme: ["C", "D", "E", "F", "G", "A", "B"],
             progressionAnalysis: progression.filter(c => c).map((c, i) => ({
                 accord: c,
@@ -294,9 +303,11 @@ const analyzeProgressionWithGemini = async (progression) => {
 };
 
 const extractChordsFromVideoWithGemini = async (videoTitle) => {
-    if (!initializeAi()) {
+    if (!ai) {
         console.warn("Gemini AI service not initialized (API_KEY missing). Using mock data.");
-        return ['Am', 'G', 'C', 'F']; // Mock data
+        // We return an empty array here to indicate failure to the user,
+        // rather than confusing them with the same mock chords every time.
+        return [];
     }
 
     const prompt = `Basé sur le titre suivant d'une vidéo YouTube (qui est probablement un backing track), agis comme un musicien expert et extrais la progression d'accords. Titre: "${videoTitle}". Réponds UNIQUEMENT avec la liste des accords séparés par une virgule (par exemple: Am,G,C,F). Ne mets pas d'espaces. Si tu ne trouves pas d'accords clairs, retourne une chaîne vide.`;
@@ -309,7 +320,7 @@ const extractChordsFromVideoWithGemini = async (videoTitle) => {
 
         const textResponse = response.text.trim();
         if (textResponse) {
-            return textResponse.split(',').filter(c => c); // Split and filter out empty strings
+            return textResponse.split(',').filter(c => c);
         }
         return [];
 
@@ -352,9 +363,6 @@ const GuitarNeck = ({ highlightedNotes, scaleNotes = [] }) => {
   const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
-    // By setting state after mount, we trigger a re-render.
-    // On this second render, neckRef.current will be defined, allowing
-    // clientWidth to be read correctly for SVG calculations.
     setIsMounted(true);
   }, []);
 
@@ -621,10 +629,12 @@ const AuthModal = ({ isOpen, onClose, initialGamificationData }) => {
 
 // === FROM App.tsx ===
 // Main application component and its sub-components
-const YoutubePlayer = ({ onPlaybackChange, onTrackLoaded, recentTracks = [], onAnalyzeVideo, isAnalyzingVideo }) => {
+const YoutubePlayer = ({ onPlaybackChange, onTrackLoaded, recentTracks = [], onAnalyzeVideo, isAnalyzingVideo, isAiAvailable }) => {
     const [urlInput, setUrlInput] = useState('');
     const [videoId, setVideoId] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
+    const playerRef = useRef(null);
+    const playerContainerRef = useRef(null);
 
     const fetchVideoTitle = async (id) => {
         try {
@@ -638,20 +648,70 @@ const YoutubePlayer = ({ onPlaybackChange, onTrackLoaded, recentTracks = [], onA
         }
     };
 
+    const onPlayerStateChange = (event) => {
+        if (event.data === 1) { // 1 is YT.PlayerState.PLAYING
+            onPlaybackChange(true);
+        } else if (event.data === 2 || event.data === 0) { // 2 is PAUSED, 0 is ENDED
+            onPlaybackChange(false);
+        }
+    };
+
+    useEffect(() => {
+        const createPlayer = () => {
+            if (playerContainerRef.current && !playerRef.current) {
+                playerRef.current = new window.YT.Player(playerContainerRef.current.id, {
+                    height: '100%',
+                    width: '100%',
+                    videoId: videoId,
+                    playerVars: { 'playsinline': 1 },
+                    events: {
+                        'onStateChange': onPlayerStateChange
+                    }
+                });
+            }
+        };
+
+        if (videoId) {
+            if (!window.YT || !window.YT.Player) {
+                window.onYouTubeIframeAPIReady = createPlayer;
+                if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+                    const tag = document.createElement('script');
+                    tag.src = "https://www.youtube.com/iframe_api";
+                    document.body.appendChild(tag);
+                }
+            } else {
+                createPlayer();
+            }
+        }
+
+        return () => {
+            if (playerRef.current) {
+                playerRef.current.destroy();
+                playerRef.current = null;
+            }
+            if(window.onYouTubeIframeAPIReady) {
+                window.onYouTubeIframeAPIReady = null;
+            }
+        };
+    }, [videoId]);
+
     const handleLoadVideo = async (urlToLoad) => {
         const url = urlToLoad || urlInput;
         const youtubeRegex = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
         const match = url.match(youtubeRegex);
         const newVideoId = match ? match[1] : null;
 
-        setVideoId(newVideoId);
-        onPlaybackChange(!!newVideoId);
+        if (newVideoId !== videoId) {
+             setVideoId(newVideoId);
+        }
 
         if (newVideoId) {
             setIsLoading(true);
             const title = await fetchVideoTitle(newVideoId);
             onTrackLoaded({ videoId: newVideoId, title, url });
             setIsLoading(false);
+        } else {
+            onPlaybackChange(false);
         }
     };
     
@@ -680,7 +740,7 @@ const YoutubePlayer = ({ onPlaybackChange, onTrackLoaded, recentTracks = [], onA
                     <button onClick={() => handleLoadVideo()} disabled={isLoading || isAnalyzingVideo} className="w-full sm:w-auto flex-1 bg-purple-600 hover:bg-purple-500 text-white font-semibold py-2 px-4 rounded-lg transition disabled:bg-gray-600 flex items-center justify-center">
                         {isLoading ? <LoadingSpinner className="w-5 h-5"/> : 'Charger'}
                     </button>
-                    {videoId && <button onClick={onAnalyzeVideo} disabled={isAnalyzingVideo || isLoading} className="w-full sm:w-auto flex-1 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-4 rounded-lg transition disabled:bg-gray-600 flex items-center justify-center">
+                    {videoId && <button onClick={onAnalyzeVideo} disabled={isAnalyzingVideo || isLoading || !isAiAvailable} className="w-full sm:w-auto flex-1 bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2 px-4 rounded-lg transition disabled:bg-gray-600 disabled:cursor-not-allowed flex items-center justify-center" title={!isAiAvailable ? "Fonctionnalité IA non disponible" : "Analyser la vidéo"}>
                         {isAnalyzingVideo ? <LoadingSpinner className="w-5 h-5"/> : 'Analyser'}
                     </button>}
                     {videoId && <button onClick={handleClear} className="bg-red-800/50 hover:bg-red-700 text-white font-semibold py-2 px-3 rounded-lg transition">Vider</button>}
@@ -703,15 +763,7 @@ const YoutubePlayer = ({ onPlaybackChange, onTrackLoaded, recentTracks = [], onA
             )}
             {videoId && (
                 <div className="aspect-video w-full max-w-2xl mx-auto rounded-lg overflow-hidden border-2 border-gray-700 mt-2">
-                    <iframe
-                        width="100%"
-                        height="100%"
-                        src={`https://www.youtube.com/embed/${videoId}`}
-                        title="YouTube video player"
-                        frameBorder="0"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowFullScreen>
-                    </iframe>
+                    <div id="yt-player-container" ref={playerContainerRef}></div>
                 </div>
             )}
         </div>
@@ -872,11 +924,17 @@ function App() {
     const [currentTrack, setCurrentTrack] = useState(null);
     const [isAnalyzingVideo, setIsAnalyzingVideo] = useState(false);
     
+    const [isAiAvailable, setIsAiAvailable] = useState(false);
+    
     const isSavingRef = useRef(false);
     const synths = useRef({}).current;
     const transportPart = useRef(null);
     const countdownPart = useRef(null);
     const debouncedAnalysis = useRef(null);
+    
+    useEffect(() => {
+        setIsAiAvailable(initializeAi());
+    }, []);
     
     const updateGamificationData = useCallback((updater) => {
         const newValue = typeof updater === 'function' ? updater(gamificationDataRef.current) : updater;
@@ -1184,7 +1242,10 @@ function App() {
     };
 
     const handleAnalyzeVideo = async () => {
-        if (!currentTrack) return;
+        if (!currentTrack || !isAiAvailable) {
+             if(!isAiAvailable) setError("Fonctionnalité IA non disponible : Clé API manquante.");
+            return;
+        }
         setIsAnalyzingVideo(true);
         setError(null);
         try {
@@ -1240,6 +1301,11 @@ function App() {
         <>
             <div className="min-h-screen p-2 sm:p-4 pb-40">
                 <div className="w-full max-w-7xl mx-auto flex flex-col gap-4">
+                    {!isAiAvailable && (
+                        <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 text-sm rounded-lg p-3 text-center">
+                           <span className="font-bold">Mode Démo :</span> L'analyse IA est simulée (la clé API est manquante dans l'environnement).
+                        </div>
+                    )}
                     <header className="flex justify-between items-center py-4">
                         <div className="text-left">
                             <h1 className="text-3xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-blue-500 mb-1">
@@ -1281,6 +1347,7 @@ function App() {
                                 recentTracks={gamificationData.recentTracks}
                                 onAnalyzeVideo={handleAnalyzeVideo}
                                 isAnalyzingVideo={isAnalyzingVideo}
+                                isAiAvailable={isAiAvailable}
                             />
                         </section>
                     
