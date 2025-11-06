@@ -1,0 +1,1078 @@
+// FIX: Add global declarations for window properties not known by TypeScript.
+// This resolves errors related to 'process', 'YT', and 'onYouTubeIframeAPIReady' not being defined on the window object.
+declare global {
+  interface Window {
+    process: {
+      env: {
+        API_KEY: string | undefined;
+      };
+    };
+    YT: any;
+    onYouTubeIframeAPIReady?: (() => void) | null;
+  }
+}
+
+// Polyfill for 'process' in browser environment
+if (typeof process === 'undefined') {
+  window.process = {
+    env: {
+      API_KEY: undefined
+    }
+  };
+}
+
+
+// === IMPORTS (Libraries) ===
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import ReactDOM from 'react-dom/client';
+import { MonoSynth, PolySynth, Synth, MembraneSynth, Part, Transport, Draw, context, start } from 'tone';
+import { initializeApp } from "firebase/app";
+import { getAuth, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
+import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
+
+
+// === FROM types.ts ===
+// Interfaces and Enums are defined here directly
+interface NotePosition {
+  note: string;
+  string: number;
+  fret: number;
+}
+
+interface YoutubeTrack {
+    videoId: string;
+    title: string;
+    url: string;
+}
+
+interface GamificationData {
+  xp: number;
+  level: number;
+  timePlayed: number; // in seconds
+  firstName?: string;
+  recentTracks?: YoutubeTrack[];
+}
+
+const PlayerState = {
+  Stopped: 'Stopped',
+  CountingDown: 'CountingDown',
+  Playing: 'Playing',
+};
+
+
+// === FROM constants.ts ===
+// App-wide constants are defined here
+const NOTES_SHARP = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const NOTES_FLAT = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
+
+const TUNING = ['E', 'A', 'D', 'G', 'B', 'E'];
+const TOTAL_CELLS = 24;
+const NUM_FRETS = 17;
+
+const GAMIFICATION_XP_PER_LEVEL = 1000;
+const GAMIFICATION_XP_PER_SECOND = 2;
+
+const PRESET_PROGRESSIONS = [
+    { name: "Pop/Rock Mineur", chords: ['Am', '', 'G', '', 'D', '', 'E', ''] },
+    { name: "Jazz ii-V-I (Majeur)", chords: ['Dm7', '', 'G7', '', 'Cmaj7', ''] },
+    { name: "Pop/Rock Majeur", chords: ['C', '', 'G', '', 'Am', '', 'F', ''] },
+    { name: "Blues 12 Mesures (en A)", chords: ['A7','','A7','','A7','','A7','','D7','','D7','','A7','','A7','','E7','','D7','','A7','','A7',''] }
+];
+
+
+// === FROM services/firebase.ts ===
+// Firebase configuration and initialization
+const firebaseConfig = {
+  apiKey: "AIzaSyBTE9nPP27Pyu0VZ0bF3Hf16d1jsBeumcs",
+  authDomain: "gia-navigator.firebaseapp.com",
+  projectId: "gia-navigator",
+  storageBucket: "gia-navigator.firebasestorage.app",
+  messagingSenderId: "684477512379",
+  appId: "1:684477512379:web:4f2c8b5ec93510aa74c79e"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+
+// === FROM components/icons.tsx ===
+// Icon components
+const PlayIcon = ({ className }: { className: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+    <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+  </svg>
+);
+
+const StopIcon = ({ className }: { className: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+  </svg>
+);
+
+const LoadingSpinner = ({ className }: { className: string }) => (
+  <svg className={`animate-spin ${className}`} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+  </svg>
+);
+
+const ClockIcon = ({ className }: { className: string }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+    </svg>
+);
+
+const UserIcon = ({ className }: { className: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} viewBox="0 0 24 24" fill="currentColor">
+    <path fillRule="evenodd" d="M18.685 19.097A9.723 9.723 0 0021.75 12c0-5.385-4.365-9.75-9.75-9.75S2.25 6.615 2.25 12a9.723 9.723 0 003.065 7.097A9.716 9.716 0 0012 21.75a9.716 9.716 0 006.685-2.653zm-12.54-1.285A7.486 7.486 0 0112 15a7.486 7.486 0 015.855 2.812A8.224 8.224 0 0112 20.25a8.224 8.224 0 01-5.855-2.438zM15.75 9a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" clipRule="evenodd" />
+  </svg>
+);
+
+const XIcon = ({ className }: { className: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+  </svg>
+);
+
+const CheckCircleIcon = ({ className }: { className: string }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" className={className} viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+    </svg>
+);
+
+const ExclamationTriangleIcon = ({ className }: { className: string }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" className={className} viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.21 3.03-1.742 3.03H4.42c-1.532 0-2.492-1.696-1.742-3.03l5.58-9.92zM10 13a1 1 0 110-2 1 1 0 010 2zm-1-8a1 1 0 011-1h.008a1 1 0 011 1v3.992a1 1 0 01-2 0V5z" clipRule="evenodd" />
+    </svg>
+);
+
+
+// === FROM components/GuitarNeck.tsx ===
+// GuitarNeck component and helpers
+const calculateNotePositions = () => {
+  const positions: NotePosition[] = [];
+  const noteIndexMap: { [key: string]: number } = {};
+  NOTES_SHARP.forEach((n, i) => (noteIndexMap[n] = i));
+  NOTES_FLAT.forEach((n, i) => (noteIndexMap[n] = i));
+
+  for (let stringIndex = 0; stringIndex < 6; stringIndex++) {
+    const openStringNote = TUNING[5 - stringIndex];
+    let currentNoteIndex = noteIndexMap[openStringNote];
+    for (let fret = 0; fret <= NUM_FRETS; fret++) {
+      const noteName = NOTES_SHARP[currentNoteIndex % 12];
+      positions.push({ note: noteName, string: stringIndex, fret });
+
+      const noteNameFlat = NOTES_FLAT[currentNoteIndex % 12];
+      if (noteName !== noteNameFlat) {
+        positions.push({ note: noteNameFlat, string: stringIndex, fret });
+      }
+      currentNoteIndex++;
+    }
+  }
+  return positions;
+};
+
+const notePositions = calculateNotePositions();
+
+const GuitarNeck = ({ highlightedNotes }: { highlightedNotes: {note: string, color: string, isBlinking: boolean, label?: string}[] }) => {
+  const neckRef = React.useRef<SVGSVGElement>(null);
+
+  const neckDimensions = {
+    height: 140,
+    nutWidth: 40,
+    getNeckWidth: () => (neckRef.current?.clientWidth ?? 800) - 40,
+  };
+
+  const getNoteCoordinates = (string: number, fret: number) => {
+    const y = (neckDimensions.height / 12) * (string * 2 + 1);
+    const x =
+      fret === 0
+        ? neckDimensions.nutWidth / 2
+        : neckDimensions.nutWidth + ((fret - 0.5) * (neckDimensions.getNeckWidth() / NUM_FRETS));
+    return { x, y };
+  };
+
+  const highlightedNoteElements = useMemo(() => {
+    if (!Array.isArray(highlightedNotes)) return [];
+    return highlightedNotes.flatMap(hNote =>
+      notePositions
+        .filter(p => p.note === hNote.note && p.fret > 0)
+        .map(p => {
+          const { x, y } = getNoteCoordinates(p.string, p.fret);
+          return (
+            <g key={`${hNote.note}-${p.string}-${p.fret}`}>
+              <circle
+                cx={x}
+                cy={y}
+                r={10}
+                fill={hNote.color}
+                stroke="#030712"
+                strokeWidth={2}
+                className={`transition-all duration-200 ${hNote.isBlinking ? 'note-dot-blinking' : ''}`}
+              />
+              <text x={x} y={y} dy="0.35em" textAnchor="middle" fontSize="10" fontWeight="bold" fill="#030712" className="pointer-events-none">
+                {hNote.label ?? hNote.note}
+              </text>
+            </g>
+          );
+        })
+    );
+  }, [highlightedNotes]);
+
+
+  return (
+    <div className="w-full overflow-x-auto bg-gray-900 p-2 rounded-lg">
+      <svg ref={neckRef} width="100%" height={neckDimensions.height + 20} className="min-w-[800px]">
+        <rect x="0" y="0" width="100%" height={neckDimensions.height} fill="#1f2937" rx="8" />
+        
+        {/* Frets and Strings */}
+        {Array.from({ length: 6 }).map((_, i) => (
+          <line
+            key={`string-${i}`}
+            x1={neckDimensions.nutWidth}
+            y1={(neckDimensions.height / 12) * (i * 2 + 1)}
+            x2="100%"
+            y2={(neckDimensions.height / 12) * (i * 2 + 1)}
+            stroke="#4b5563"
+            strokeWidth={1 + (i * 0.2)}
+          />
+        ))}
+        {Array.from({ length: NUM_FRETS + 1 }).map((_, i) => (
+          <line
+            key={`fret-${i}`}
+            x1={neckDimensions.nutWidth + (i * (neckDimensions.getNeckWidth() / NUM_FRETS))}
+            y1={(neckDimensions.height / 12)}
+            x2={neckDimensions.nutWidth + (i * (neckDimensions.getNeckWidth() / NUM_FRETS))}
+            y2={(neckDimensions.height / 12) * 11}
+            stroke={i === 0 ? '#d1d5db' : '#6b7280'}
+            strokeWidth={i === 0 ? 5 : 2}
+          />
+        ))}
+        
+        {/* Fret Markers */}
+        {[3, 5, 7, 9, 15, 17].map(fret => (
+            <circle key={`marker-${fret}`} cx={neckDimensions.nutWidth + ((fret - 0.5) * (neckDimensions.getNeckWidth() / NUM_FRETS))} cy={neckDimensions.height / 2} r={5} fill="#4b5563" />
+        ))}
+        <circle cx={neckDimensions.nutWidth + ((12 - 0.5) * (neckDimensions.getNeckWidth() / NUM_FRETS))} cy={neckDimensions.height / 3} r={5} fill="#4b5563" />
+        <circle cx={neckDimensions.nutWidth + ((12 - 0.5) * (neckDimensions.getNeckWidth() / NUM_FRETS))} cy={2 * neckDimensions.height / 3} r={5} fill="#4b5563" />
+        
+        {/* Fret Numbers */}
+        {[3, 5, 7, 9, 12, 15, 17].map(fret => (
+            <text key={`fret-num-${fret}`} x={neckDimensions.nutWidth + ((fret - 0.5) * (neckDimensions.getNeckWidth() / NUM_FRETS))} y={neckDimensions.height + 15} textAnchor="middle" fontSize="10" fill="#9ca3af">{fret}</text>
+        ))}
+
+        <g id="highlighted-notes">{highlightedNoteElements}</g>
+      </svg>
+    </div>
+  );
+};
+
+
+// === FROM components/AuthModal.tsx ===
+// AuthModal component
+const AuthModal = ({ isOpen, onClose, initialGamificationData }: { isOpen: boolean, onClose: () => void, initialGamificationData: GamificationData }) => {
+  const [activeTab, setActiveTab] = useState('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setEmail('');
+      setPassword('');
+      setFirstName('');
+      setError(null);
+      setIsLoading(false);
+      setActiveTab('login');
+    }
+  }, [isOpen]);
+
+  const getFirebaseErrorMessage = (errorCode: string) => {
+    switch (errorCode) {
+      case 'auth/invalid-email':
+        return 'Adresse email invalide.';
+      case 'auth/user-not-found':
+      case 'auth/wrong-password':
+      case 'auth/invalid-credential':
+        return 'Email ou mot de passe incorrect.';
+      case 'auth/email-already-in-use':
+        return 'Cette adresse email est déjà utilisée.';
+      case 'auth/weak-password':
+        return 'Le mot de passe doit contenir au moins 6 caractères.';
+      case 'auth/operation-not-allowed':
+        return "Erreur de configuration : La connexion par Email/Mot de passe n'est pas activée. (Note pour le développeur : veuillez l'activer dans votre console Firebase -> Authentication -> Sign-in method).";
+      default:
+        return 'Une erreur est survenue. Veuillez réessayer.';
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      if (activeTab === 'login') {
+        await signInWithEmailAndPassword(auth, email, password);
+      } else {
+        if (!firstName.trim()) {
+            setError("Veuillez entrer votre prénom.");
+            setIsLoading(false);
+            return;
+        }
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const userData = {
+            ...initialGamificationData,
+            firstName: firstName.trim(),
+        };
+        await setDoc(doc(db, "users", userCredential.user.uid), userData);
+      }
+      onClose();
+    } catch (err: any) {
+      console.error("Firebase Auth Error:", err, err.code);
+      setError(getFirebaseErrorMessage(err.code));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="w-full max-w-sm bg-gray-900 rounded-2xl border border-gray-700 shadow-2xl shadow-purple-500/10 p-8" onClick={e => e.stopPropagation()}>
+        <div className="flex justify-end">
+             <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors">
+                <XIcon className="w-6 h-6"/>
+            </button>
+        </div>
+        
+        <div className="mb-6">
+          <div className="flex border-b border-gray-700">
+            <button
+              onClick={() => setActiveTab('login')}
+              className={`w-1/2 py-3 text-sm font-bold transition-colors ${activeTab === 'login' ? 'text-purple-400 border-b-2 border-purple-400' : 'text-gray-400 hover:text-white'}`}
+            >
+              CONNEXION
+            </button>
+            <button
+              onClick={() => setActiveTab('signup')}
+              className={`w-1/2 py-3 text-sm font-bold transition-colors ${activeTab === 'signup' ? 'text-purple-400 border-b-2 border-purple-400' : 'text-gray-400 hover:text-white'}`}
+            >
+              INSCRIPTION
+            </button>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          <div className="space-y-4">
+            {activeTab === 'signup' && (
+                <div>
+                    <label htmlFor="firstName" className="block text-sm font-medium text-gray-400 mb-2">Prénom</label>
+                    <input
+                        type="text"
+                        id="firstName"
+                        value={firstName}
+                        onChange={e => setFirstName(e.target.value)}
+                        required
+                        className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        placeholder="Alex"
+                    />
+                </div>
+            )}
+            <div>
+              <label htmlFor="email" className="block text-sm font-medium text-gray-400 mb-2">Email</label>
+              <input
+                type="email"
+                id="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                required
+                className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                placeholder="vous@email.com"
+              />
+            </div>
+            <div>
+              <label htmlFor="password"className="block text-sm font-medium text-gray-400 mb-2">Mot de passe</label>
+              <input
+                type="password"
+                id="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                required
+                className="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                placeholder="********"
+              />
+            </div>
+          </div>
+          
+          {error && <p className="text-red-400 text-sm mt-4 text-center">{error}</p>}
+
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="w-full mt-6 py-3 px-4 bg-purple-600 hover:bg-purple-500 rounded-lg font-semibold text-white transition-all duration-200 flex items-center justify-center disabled:bg-gray-600 disabled:cursor-not-allowed"
+          >
+            {isLoading ? <LoadingSpinner className="w-5 h-5"/> : (activeTab === 'login' ? 'Se connecter' : "S'inscrire")}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+
+// === FROM App.tsx ===
+// Main application component and its sub-components
+const YoutubePlayer = ({ onPlaybackChange, onTrackLoaded, recentTracks = [] }: { onPlaybackChange: (isPlaying: boolean) => void, onTrackLoaded: (track: YoutubeTrack) => void, recentTracks: YoutubeTrack[] }) => {
+    const [urlInput, setUrlInput] = useState('');
+    const [videoId, setVideoId] = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const playerRef = useRef<any>(null);
+    const playerContainerRef = useRef<HTMLDivElement>(null);
+
+    const fetchVideoTitle = async (id: string) => {
+        try {
+            const response = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${id}`);
+            if (!response.ok) throw new Error('Failed to fetch video title');
+            const data = await response.json();
+            return data.title || 'Titre inconnu';
+        } catch (error) {
+            console.error(error);
+            return 'Titre inconnu';
+        }
+    };
+
+    const onPlayerStateChange = (event: any) => {
+        if (event.data === 1) { // 1 is YT.PlayerState.PLAYING
+            onPlaybackChange(true);
+        } else if (event.data === 2 || event.data === 0) { // 2 is PAUSED, 0 is ENDED
+            onPlaybackChange(false);
+        }
+    };
+
+    useEffect(() => {
+        const createPlayer = () => {
+            if (playerContainerRef.current && !playerRef.current) {
+                playerRef.current = new window.YT.Player(playerContainerRef.current.id, {
+                    height: '100%',
+                    width: '100%',
+                    videoId: videoId,
+                    playerVars: { 'playsinline': 1 },
+                    events: {
+                        'onStateChange': onPlayerStateChange
+                    }
+                });
+            }
+        };
+
+        if (videoId) {
+            if (!window.YT || !window.YT.Player) {
+                window.onYouTubeIframeAPIReady = createPlayer;
+                if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+                    const tag = document.createElement('script');
+                    tag.src = "https://www.youtube.com/iframe_api";
+                    document.body.appendChild(tag);
+                }
+            } else {
+                createPlayer();
+            }
+        }
+
+        return () => {
+            if (playerRef.current) {
+                playerRef.current.destroy();
+                playerRef.current = null;
+            }
+            if(window.onYouTubeIframeAPIReady) {
+                window.onYouTubeIframeAPIReady = null;
+            }
+        };
+    }, [videoId]);
+
+    // FIX: Made urlToLoad parameter optional to handle calls without arguments, preventing a runtime error.
+    const handleLoadVideo = async (urlToLoad?: string) => {
+        const url = urlToLoad || urlInput;
+        const youtubeRegex = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
+        const match = url.match(youtubeRegex);
+        const newVideoId = match ? match[1] : null;
+
+        if (newVideoId !== videoId) {
+             setVideoId(newVideoId);
+        }
+
+        if (newVideoId) {
+            setIsLoading(true);
+            const title = await fetchVideoTitle(newVideoId);
+            onTrackLoaded({ videoId: newVideoId, title, url });
+            setIsLoading(false);
+        } else {
+            onPlaybackChange(false);
+        }
+    };
+    
+    const handleClear = () => {
+        setUrlInput('');
+        setVideoId(null);
+        onPlaybackChange(false);
+    }
+
+    const handleRecentClick = (track: YoutubeTrack) => {
+        setUrlInput(track.url);
+        handleLoadVideo(track.url);
+    };
+
+    return (
+        <div className="flex flex-col gap-3">
+             <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                    type="text"
+                    value={urlInput}
+                    onChange={e => setUrlInput(e.target.value)}
+                    placeholder="Collez une URL YouTube ici..."
+                    className="w-full p-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+                <div className="flex gap-2">
+                    <button onClick={() => handleLoadVideo()} disabled={isLoading} className="w-full sm:w-auto flex-1 bg-purple-600 hover:bg-purple-500 text-white font-semibold py-2 px-4 rounded-lg transition disabled:bg-gray-600 flex items-center justify-center">
+                        {isLoading ? <LoadingSpinner className="w-5 h-5"/> : 'Charger'}
+                    </button>
+                    {videoId && <button onClick={handleClear} className="bg-red-800/50 hover:bg-red-700 text-white font-semibold py-2 px-3 rounded-lg transition">Vider</button>}
+                </div>
+            </div>
+             {Array.isArray(recentTracks) && recentTracks.length > 0 && (
+                <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-800">
+                    <span className="text-xs font-semibold text-gray-400 self-center">Récents:</span>
+                    {recentTracks.map(track => (
+                        <button
+                            key={track.videoId}
+                            onClick={() => handleRecentClick(track)}
+                            className="text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 py-1 px-2 rounded-md transition"
+                            title={track.title}
+                        >
+                            {track.title.length > 30 ? `${track.title.substring(0, 27)}...` : track.title}
+                        </button>
+                    ))}
+                </div>
+            )}
+            {videoId && (
+                <div className="aspect-video w-full max-w-2xl mx-auto rounded-lg overflow-hidden border-2 border-gray-700 mt-2">
+                    <div id="yt-player-container" ref={playerContainerRef}></div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const HeaderGamificationStats = ({ data }: { data: GamificationData }) => {
+    if (!data) return null;
+    const xp = data.xp ?? 0;
+    const level = data.level ?? 1;
+    const timePlayed = data.timePlayed ?? 0;
+    const levelProgress = GAMIFICATION_XP_PER_LEVEL > 0 ? (xp / GAMIFICATION_XP_PER_LEVEL) * 100 : 0;
+    const timePlayedFormatted = `${String(Math.floor(timePlayed / 60)).padStart(2, '0')}:${String(timePlayed % 60).padStart(2, '0')}`;
+
+    return (
+        <div className="flex-grow flex items-center justify-center sm:justify-start" style={{minWidth: '320px'}}>
+            <div className="hud-container relative w-full max-w-sm p-1">
+                {/* Level Badge - Hexagonal */}
+                <div className="hud-level-badge absolute -left-4 top-1/2 -translate-y-1/2 w-16 h-16 flex items-center justify-center">
+                    <div className="relative w-full h-full flex flex-col items-center justify-center text-center">
+                         <span className="text-xs font-bold text-purple-300 -mb-1 leading-none">LVL</span>
+                         <span className="text-3xl font-black text-white tracking-tighter leading-none text-shadow-heavy">{level}</span>
+                    </div>
+                </div>
+
+                {/* Main Stats Panel */}
+                <div className="pl-10 pr-2 py-1.5 w-full">
+                    {/* XP Bar */}
+                    <div className="relative w-full h-6 hud-xp-container">
+                         <div
+                            className="h-full hud-xp-bar transition-all duration-500 ease-out"
+                            style={{ width: `${levelProgress}%` }}
+                         ></div>
+                         <div className="absolute inset-0 flex items-center justify-center">
+                            <span className="text-sm font-bold text-white text-shadow-heavy tracking-wider">{xp} / {GAMIFICATION_XP_PER_LEVEL}</span>
+                        </div>
+                    </div>
+                    
+                    {/* Time Played */}
+                    <div className="absolute bottom-[-14px] right-2 flex items-center gap-1.5 hud-time-container px-2 py-0.5">
+                        <ClockIcon className="w-3 h-3 text-cyan-300"/>
+                        <span className="font-mono text-xs font-semibold text-cyan-300 tracking-wider">{timePlayedFormatted}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+
+const SaveStatusIndicator = ({ status }: { status: string }) => {
+    // FIX: Replaced JSX.Element with React.ReactElement to resolve "Cannot find namespace 'JSX'" error.
+    const statusMap: { [key: string]: { icon: React.ReactElement, title: string } } = {
+        saving: {
+            icon: <LoadingSpinner className="w-4 h-4 text-gray-400" />,
+            title: "Sauvegarde en cours...",
+        },
+        saved: {
+            icon: <CheckCircleIcon className="w-4 h-4 text-green-400" />,
+            title: "Sauvegardé",
+        },
+        error: {
+            icon: <ExclamationTriangleIcon className="w-4 h-4 text-red-400" />,
+            title: "Erreur de sauvegarde",
+        },
+    };
+
+    if (!status || status === 'idle') return null;
+
+    const currentStatus = statusMap[status];
+
+    return (
+        <div title={currentStatus.title} className="flex items-center">
+            {currentStatus.icon}
+        </div>
+    );
+};
+
+const INITIAL_GAMIFICATION_DATA: GamificationData = { xp: 0, level: 1, timePlayed: 0, recentTracks: [] };
+
+const getRootNote = (chord: string) => {
+    if (!chord) return null;
+    const match = chord.match(/^[A-G][#b]?/);
+    return match ? match[0] : null;
+};
+
+const dbToSlider = (db: number) => (db + 40) * 2.5;
+const sliderToDb = (slider: number) => (slider * 0.4) - 40;
+
+function App() {
+    const [chords, setChords] = useState(Array(TOTAL_CELLS).fill(''));
+    
+    const [playerState, setPlayerState] = useState(PlayerState.Stopped);
+    const [currentBeat, setCurrentBeat] = useState(-1);
+    const [tempo, setTempo] = useState(60);
+    const [volumes, setVolumes] = useState({ metro: -12, bass: -6, chord: -14 });
+    const [isYoutubePlaying, setIsYoutubePlaying] = useState(false);
+    
+    const [gamificationData, setGamificationData] = useState<GamificationData>(INITIAL_GAMIFICATION_DATA);
+    const gamificationDataRef = useRef<GamificationData>(INITIAL_GAMIFICATION_DATA);
+    
+    const [currentUser, setCurrentUser] = useState<any>(null);
+    const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+    const [saveStatus, setSaveStatus] = useState('idle');
+    
+    const [currentTrack, setCurrentTrack] = useState<YoutubeTrack | null>(null);
+    const [isAudioReady, setIsAudioReady] = useState(false);
+    
+    const isSavingRef = useRef(false);
+    // FIX: Corrected useRef usage by removing .current from initialization to ensure the ref object persists across re-renders. This resolves property access errors on a re-initialized object.
+    const synths = useRef<{
+        bass?: MonoSynth,
+        chord?: PolySynth,
+        metro?: MembraneSynth
+    }>({});
+    const transportPart = useRef<Part | null>(null);
+    const countdownPart = useRef<Part | null>(null);
+    
+    const updateGamificationData = useCallback((updater: (d: GamificationData) => GamificationData) => {
+        const newValue = typeof updater === 'function' ? updater(gamificationDataRef.current) : updater;
+        gamificationDataRef.current = newValue;
+        setGamificationData(newValue);
+    }, []);
+
+    const saveUserData = useCallback(async () => {
+        if (!currentUser || isSavingRef.current) return;
+        isSavingRef.current = true;
+        setSaveStatus('saving');
+        const dataToSave = gamificationDataRef.current;
+        const saveDataPromise = setDoc(doc(db, 'users', currentUser.uid), dataToSave, { merge: true });
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000));
+
+        try {
+            await Promise.race([saveDataPromise, timeoutPromise]);
+            setSaveStatus('saved');
+            setTimeout(() => setSaveStatus(current => (current === 'saved' ? 'idle' : current)), 2000);
+        } catch (error) {
+            console.error("Save Error:", error);
+            setSaveStatus('error');
+            setTimeout(() => setSaveStatus(current => (current === 'error' ? 'idle' : current)), 5000);
+        } finally {
+            isSavingRef.current = false;
+        }
+    }, [currentUser]);
+
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                setCurrentUser(user);
+                const userDocRef = doc(db, 'users', user.uid);
+                const userDoc = await getDoc(userDocRef);
+                if (userDoc.exists()) {
+                    const data = userDoc.data();
+                    // FIX: Merge loaded data with initial data to prevent NaN errors from incomplete profiles.
+                    const mergedData = { ...INITIAL_GAMIFICATION_DATA, ...data };
+                    updateGamificationData(() => mergedData);
+                } else {
+                    await setDoc(doc(db, "users", user.uid), INITIAL_GAMIFICATION_DATA);
+                    updateGamificationData(() => INITIAL_GAMIFICATION_DATA);
+                }
+            } else {
+                setCurrentUser(null);
+                updateGamificationData(() => INITIAL_GAMIFICATION_DATA);
+            }
+        });
+        return () => unsubscribe();
+    }, [updateGamificationData]);
+    
+    useEffect(() => {
+        if (!currentUser) return;
+        const saveInterval = setInterval(() => {
+            if (!isSavingRef.current) saveUserData();
+        }, 3000);
+        return () => clearInterval(saveInterval);
+    }, [currentUser, saveUserData]);
+
+    useEffect(() => {
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden' && currentUser && !isSavingRef.current) saveUserData();
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }, [currentUser, saveUserData]);
+
+    const handleChordChange = (index: number, value: string) => {
+        const newChords = [...chords];
+        newChords[index] = value;
+        setChords(newChords);
+    };
+
+    const handleVolumeChange = (instrument: 'metro' | 'bass' | 'chord', value: string) => {
+        setVolumes(prev => ({
+            ...prev,
+            [instrument]: sliderToDb(Number(value))
+        }));
+    };
+
+    useEffect(() => {
+        setIsAudioReady(false);
+        synths.current.bass = new MonoSynth().toDestination();
+        synths.current.bass.set({ oscillator: { type: 'fatsawtooth' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.5 } });
+        synths.current.chord = new PolySynth(Synth).toDestination();
+        synths.current.chord.set({ oscillator: { type: "fatsawtooth", count: 3, spread: 30 }, envelope: { attack: 0.4, decay: 0.1, sustain: 0.8, release: 1.5 } });
+        synths.current.metro = new MembraneSynth().toDestination();
+        synths.current.metro.set({ pitchDecay: 0.01, octaves: 4, oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.1, sustain: 0.01, release: 0.1 } });
+        setIsAudioReady(true);
+        return () => {
+            setIsAudioReady(false);
+            // FIX: Explicitly dispose of each synth to resolve a TypeScript error where `synth` was inferred as `unknown`.
+            synths.current.bass?.dispose();
+            synths.current.chord?.dispose();
+            synths.current.metro?.dispose();
+            Transport.cancel(0);
+        };
+    }, []);
+
+    useEffect(() => {
+        Transport.bpm.value = tempo;
+        if(synths.current.metro) synths.current.metro.volume.value = volumes.metro;
+        if(synths.current.bass) synths.current.bass.volume.value = volumes.bass;
+        if(synths.current.chord) synths.current.chord.volume.value = volumes.chord;
+    }, [tempo, volumes]);
+
+    useEffect(() => {
+        // FIX: Replaced NodeJS.Timeout with ReturnType<typeof setInterval> for browser compatibility, as setInterval in the browser returns a number, not a Timeout object.
+        let timer: ReturnType<typeof setInterval>;
+        if (playerState === PlayerState.Playing || isYoutubePlaying) {
+            timer = setInterval(() => {
+                updateGamificationData(prev => {
+                    const newXp = prev.xp + GAMIFICATION_XP_PER_SECOND;
+                    const newLevel = prev.level + Math.floor(newXp / GAMIFICATION_XP_PER_LEVEL);
+                    return {
+                        ...prev,
+                        timePlayed: prev.timePlayed + 1,
+                        xp: newXp % GAMIFICATION_XP_PER_LEVEL,
+                        level: newLevel,
+                    };
+                });
+            }, 1000);
+        }
+        return () => clearInterval(timer);
+    }, [playerState, isYoutubePlaying, updateGamificationData]);
+
+    const stopPlayback = useCallback(() => {
+        Transport.stop();
+        Transport.cancel(0);
+        transportPart.current?.dispose();
+        countdownPart.current?.dispose();
+        synths.current.bass?.triggerRelease(context.currentTime);
+        synths.current.chord?.releaseAll(context.currentTime);
+        setPlayerState(PlayerState.Stopped);
+        setCurrentBeat(-1);
+    }, []);
+
+    const startPlayback = useCallback(() => {
+        const activeChords = chords.map((c, i) => ({ chord: c, index: i })).filter(item => item.chord.trim() !== '');
+        if (activeChords.length === 0) return;
+        const lastChordCellIndex = Math.max(...activeChords.map(c => c.index));
+        const totalBeatsInProgression = (lastChordCellIndex + 1) * 2;
+        const loopEndMeasures = Math.ceil(totalBeatsInProgression / 4);
+        if (loopEndMeasures === 0) return;
+        const events: any[] = [];
+        let chordMap = new Map();
+        chords.forEach((c, i) => { if (c.trim()) chordMap.set(i, c.trim())});
+        for(let i=0; i<loopEndMeasures * 4; i++) {
+            const time = `0:${i}`;
+            const cellIndex = Math.floor(i / 2);
+            events.push({ time, beat: i, type: 'highlight' });
+            events.push({ time, note: i % 4 === 0 ? 'C5' : 'C4', type: 'metro' });
+            if(i % 2 === 0 && chordMap.has(cellIndex)) {
+                const chordName = chordMap.get(cellIndex);
+                const rootNote = getRootNote(chordName);
+                if(rootNote) {
+                    let nextChangeBeat = totalBeatsInProgression;
+                    for(let j=cellIndex+1; j <= lastChordCellIndex; j++) {
+                        if(chordMap.has(j)) { nextChangeBeat = j * 2; break; }
+                    }
+                    const durationBeats = nextChangeBeat - i;
+                    const duration = `0:${durationBeats}`;
+                    events.push({ time, note: rootNote + '2', duration, type: 'bass' });
+                }
+            }
+        }
+        transportPart.current = new Part((time, value) => {
+            if (value.type === 'highlight') Draw.schedule(() => setCurrentBeat(value.beat), time);
+            else if (value.type === 'metro') synths.current.metro?.triggerAttackRelease(value.note, '16n', time);
+            else if (value.type === 'bass') synths.current.bass?.triggerAttackRelease(value.note, value.duration, time);
+            else if (value.type === 'chord' && synths.current.chord) (synths.current.chord as any).triggerAttackRelease(value.notes, value.duration, time);
+        }, events).start('1m');
+        transportPart.current.loop = true;
+        transportPart.current.loopEnd = `${loopEndMeasures}m`;
+        countdownPart.current = new Part((time, value) => {
+             synths.current.metro?.triggerAttackRelease('C5', '8n', time);
+             Draw.schedule(() => setCurrentBeat(value.beat), time);
+        }, [{time: '0:0', beat: -4}, {time: '0:1', beat: -3}, {time: '0:2', beat: -2}, {time: '0:3', beat: -1}]).start(0);
+        Transport.loop = true;
+        Transport.loopStart = '1m';
+        Transport.loopEnd = `${loopEndMeasures + 1}m`;
+        Transport.scheduleOnce(() => setPlayerState(PlayerState.Playing), '1m');
+        Transport.start();
+        setPlayerState(PlayerState.CountingDown);
+    }, [chords]);
+
+    const handlePlayStop = async () => {
+        if (context.state !== 'running') await start();
+        if (playerState !== PlayerState.Stopped) stopPlayback();
+        else startPlayback();
+    };
+
+    const getHighlightedNotes = useCallback(() => {
+        if (playerState === PlayerState.Stopped) return [];
+
+        const activeChordsWithIndices = chords
+            .map((c, i) => ({ chord: c, index: i }))
+            .filter(item => item.chord.trim() !== '');
+
+        if (activeChordsWithIndices.length === 0) return [];
+
+        const firstChord = activeChordsWithIndices[0].chord;
+        const firstRoot = getRootNote(firstChord);
+        
+        if (playerState === PlayerState.CountingDown) {
+            return firstRoot ? [{ note: firstRoot, color: '#facc15', isBlinking: false }] : [];
+        }
+
+        const currentCellIndex = Math.floor(currentBeat / 2);
+        let currentChord: string | null = null;
+        for (let i = currentCellIndex; i >= 0; i--) {
+            const chordAtIndex = chords[i].trim();
+            if (chordAtIndex) {
+                currentChord = chordAtIndex;
+                break;
+            }
+        }
+        
+        if (!currentChord) return [];
+
+        const currentRoot = getRootNote(currentChord);
+        return currentRoot ? [{ note: currentRoot, color: '#a855f7', isBlinking: true, label: currentRoot }] : [];
+    }, [playerState, currentBeat, chords]);
+    
+    const handleYoutubePlaybackChange = (isPlaying: boolean) => setIsYoutubePlaying(isPlaying);
+    
+    const handleTrackLoaded = (track: YoutubeTrack) => {
+        setCurrentTrack(track);
+        updateGamificationData(prev => {
+            const existingTracks = prev.recentTracks || [];
+            const filteredTracks = existingTracks.filter(t => t.videoId !== track.videoId);
+            const newTracks = [track, ...filteredTracks].slice(0, 5);
+            return { ...prev, recentTracks: newTracks };
+        });
+    };
+
+    const loadPreset = () => {
+        const preset = PRESET_PROGRESSIONS[Math.floor(Math.random() * PRESET_PROGRESSIONS.length)];
+        const newChords = Array(TOTAL_CELLS).fill('');
+        preset.chords.forEach((c, i) => newChords[i] = c);
+        setChords(newChords);
+    };
+
+    const clearGrid = () => {
+        setChords(Array(TOTAL_CELLS).fill(''));
+    };
+    
+    const handleLogout = useCallback(async () => {
+        try {
+            if (currentUser) await saveUserData();
+            await signOut(auth);
+        } catch (error) {
+            console.error("Logout Error:", error);
+        }
+    }, [currentUser, saveUserData]);
+    
+    const getGreeting = () => {
+        const hour = new Date().getHours();
+        return hour < 18 ? 'Bonjour' : 'Bonsoir';
+    };
+
+    return (
+        <>
+            <div className="bg-gray-900 border-b border-gray-800 sticky top-0 z-10">
+                <div className="w-full max-w-7xl mx-auto px-2 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+                    {currentUser ? (
+                        <>
+                            <HeaderGamificationStats data={gamificationData} />
+                            <div className="flex-shrink-0 flex items-center gap-4">
+                                <SaveStatusIndicator status={saveStatus} />
+                                <div className="text-right">
+                                    {gamificationData.firstName ? (
+                                        <p className="font-semibold text-gray-100 text-sm hidden sm:block">{getGreeting()}, {gamificationData.firstName}!</p>
+                                    ) : (
+                                        <p className="text-sm text-gray-300 truncate hidden sm:block">{currentUser.email}</p>
+                                    )}
+                                    <button onClick={handleLogout} className="text-xs text-red-400 hover:underline">Déconnexion</button>
+                                </div>
+                                <UserIcon className="w-8 h-8 text-gray-400"/>
+                            </div>
+                        </>
+                    ) : (
+                        <div className="w-full flex justify-end">
+                            <button onClick={() => setIsAuthModalOpen(true)} className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-gray-300 font-semibold py-2 px-4 rounded-lg transition">
+                                <UserIcon className="w-5 h-5"/>
+                                <span className="hidden sm:inline">Connexion / Inscription</span>
+                                <span className="sm:hidden">Connexion</span>
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <div className="min-h-screen p-2 sm:p-4 pb-8">
+                <div className="w-full max-w-7xl mx-auto flex flex-col gap-4">
+                    <header className="py-4">
+                        <div className="text-left">
+                            <h1 className="text-3xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-blue-500 mb-1">
+                                🎸 GIA Navigator
+                            </h1>
+                            <p className="text-md text-gray-400">Votre plan d'action visuel pour l'improvisation.</p>
+                        </div>
+                    </header>
+
+                    <main className="flex flex-col gap-4">
+                        <section className="p-4 bg-gray-900/50 rounded-xl border border-gray-800">
+                            <h2 className="text-lg font-bold text-white mb-4">1. Backing Track (Optionnel)</h2>
+                            <YoutubePlayer 
+                                onPlaybackChange={handleYoutubePlaybackChange}
+                                onTrackLoaded={handleTrackLoaded}
+                                recentTracks={gamificationData.recentTracks}
+                            />
+                        </section>
+                    
+                        <section className="p-4 bg-gray-900/50 rounded-xl border border-gray-800">
+                             <div className="flex justify-between items-center mb-4">
+                                <h2 className="text-lg font-bold text-white">2. Entrez votre grille (1 case = 2 temps)</h2>
+                                <div className="flex gap-2">
+                                    <button onClick={loadPreset} className="text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 font-semibold py-1.5 px-3 rounded-lg transition">🎲 Aléatoire</button>
+                                    <button onClick={clearGrid} className="text-xs bg-red-800/50 hover:bg-red-700 text-white font-semibold py-1.5 px-3 rounded-lg transition">🗑️ Vider</button>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-8 gap-1 mb-4">
+                                {chords.map((chord, i) => {
+                                    const currentCell = Math.floor(currentBeat / 2);
+                                    const isActive = playerState === PlayerState.Playing && i === currentCell;
+                                    return (
+                                        <input
+                                            key={i}
+                                            type="text"
+                                            value={chord}
+                                            onChange={(e) => handleChordChange(i, e.target.value)}
+                                            className={`w-full p-2 text-center font-bold text-white bg-gray-800 border border-gray-700 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all duration-150 ${
+                                                isActive ? 'ring-2 ring-blue-400 shadow-lg shadow-blue-400/20' : ''
+                                            }`}
+                                        />
+                                    );
+                                })}
+                            </div>
+
+                            <GuitarNeck highlightedNotes={getHighlightedNotes()} />
+                            
+                            <div className="mt-4 flex flex-col md:flex-row items-center justify-between gap-4 p-3 bg-gray-900 rounded-lg">
+                                <button onClick={handlePlayStop} disabled={!isAudioReady || playerState === PlayerState.CountingDown} className="w-full md:w-auto flex items-center justify-center gap-3 px-6 py-3 font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-500 transition-all duration-200 disabled:bg-gray-500 disabled:cursor-wait">
+                                    {playerState === PlayerState.Stopped && <PlayIcon className="w-6 h-6" />}
+                                    {playerState !== PlayerState.Stopped && <StopIcon className="w-6 h-6" />}
+                                    <span>{
+                                        !isAudioReady ? 'Chargement audio...' :
+                                        playerState === PlayerState.Stopped ? 'Play' :
+                                        playerState === PlayerState.CountingDown ? `Décompte ${4 - (currentBeat * -1 - 1)}` :
+                                        'Stop'
+                                    }</span>
+                                </button>
+                                <div className="w-full flex-1 flex flex-col sm:flex-row items-center gap-4">
+                                    <div className="w-full flex items-center gap-3">
+                                        <label htmlFor="tempo" className="font-semibold text-gray-300 whitespace-nowrap">Tempo:</label>
+                                        <input type="range" id="tempo" min="40" max="200" value={tempo} onChange={e => setTempo(Number(e.target.value))} className="w-full accent-purple-500"/>
+                                        <span className="w-16 text-center font-bold">{tempo} bpm</span>
+                                    </div>
+                                    <div className="w-full sm:max-w-xs flex items-center gap-4 border-t sm:border-t-0 sm:border-l border-gray-700 pt-4 sm:pt-0 sm:pl-4">
+                                        <div className="flex flex-col items-center gap-1 w-1/3 text-center">
+                                            <label htmlFor="metro-vol" className="text-xs font-semibold text-gray-400">Métronome</label>
+                                            <input type="range" id="metro-vol" min="0" max="100" value={dbToSlider(volumes.metro)} onChange={e => handleVolumeChange('metro', e.target.value)} className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer range-sm accent-purple-500"/>
+                                        </div>
+                                        <div className="flex flex-col items-center gap-1 w-1/3 text-center">
+                                            <label htmlFor="bass-vol" className="text-xs font-semibold text-gray-400">Basse</label>
+                                            <input type="range" id="bass-vol" min="0" max="100" value={dbToSlider(volumes.bass)} onChange={e => handleVolumeChange('bass', e.target.value)} className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer range-sm accent-purple-500"/>
+                                        </div>
+                                        <div className="flex flex-col items-center gap-1 w-1/3 text-center">
+                                            <label htmlFor="chord-vol" className="text-xs font-semibold text-gray-400">Accords</label>
+                                            <input type="range" id="chord-vol" min="0" max="100" value={dbToSlider(volumes.chord)} onChange={e => handleVolumeChange('chord', e.target.value)} className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer range-sm accent-purple-500"/>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                    </main>
+                </div>
+            </div>
+            <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} initialGamificationData={gamificationDataRef.current} />
+        </>
+    );
+}
+
+// === RENDER LOGIC ===
+// Final step: render the App component into the DOM.
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+    throw new Error("Could not find root element to mount to");
+}
+
+const root = ReactDOM.createRoot(rootElement);
+root.render(
+    <React.StrictMode>
+        <App />
+    </React.StrictMode>
+);

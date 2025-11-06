@@ -30,6 +30,77 @@
           filter: drop-shadow(0 0 10px rgba(168, 85, 247, 0.8));
         }
       }
+      /* Custom styles for range inputs */
+      input[type="range"].accent-purple-500 {
+        accent-color: #a855f7;
+      }
+      
+      /* HUD Styles */
+      .text-shadow-heavy {
+        text-shadow: 0 0 2px rgba(255,255,255,0.3), 0 0 5px rgba(0,0,0,0.8), 1px 1px 2px rgba(0,0,0,1);
+      }
+
+      .hud-container {
+        background: linear-gradient(135deg, rgba(30, 27, 47, 0.8), rgba(20, 18, 30, 0.8));
+        backdrop-filter: blur(5px);
+        border: 1px solid rgba(168, 85, 247, 0.3);
+        clip-path: polygon(0% 0%, 95% 0%, 100% 30%, 100% 100%, 0% 100%);
+        box-shadow: 0 0 15px rgba(168, 85, 247, 0.1), inset 0 0 5px rgba(30, 27, 47, 0.5);
+      }
+
+      .hud-level-badge {
+        background: radial-gradient(circle, #3b0764 0%, #1e1b2f 70%);
+        clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+        animation: pulse-glow 2.5s infinite ease-in-out;
+        border: 1px solid rgba(192, 132, 252, 0.5);
+      }
+
+      @keyframes pulse-glow {
+        0%, 100% {
+          transform: translateY(-50%) scale(1);
+          filter: drop-shadow(0 0 6px rgba(192, 132, 252, 0.5));
+        }
+        50% {
+          transform: translateY(-50%) scale(1.05);
+          filter: drop-shadow(0 0 12px rgba(192, 132, 252, 0.8));
+        }
+      }
+
+      .hud-xp-container {
+        background-color: rgba(0, 0, 0, 0.5);
+        border: 1px solid rgba(139, 92, 246, 0.4);
+        padding: 2px;
+        clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 5% 100%, 0% 70%);
+      }
+
+      .hud-xp-bar {
+         background: linear-gradient(90deg, #8b5cf6, #3b82f6);
+         position: relative;
+         overflow: hidden;
+         clip-path: polygon(0% 0%, 100% 0%, 100% 100%, 5% 100%, 0% 70%);
+      }
+      
+      .hud-xp-bar::after {
+        content: '';
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.3) 50%, rgba(255,255,255,0) 100%);
+        transform: translateX(-100%);
+        animation: progress-shine 2.5s infinite linear;
+      }
+      
+      .hud-time-container {
+        background-color: rgba(15, 23, 42, 0.8);
+        border: 1px solid rgba(56, 189, 248, 0.3);
+        border-top: none;
+        clip-path: polygon(10% 0, 100% 0, 100% 100%, 0 100%, 0 20%);
+      }
+      
+      @keyframes progress-shine {
+        from { transform: translateX(-100%) skewX(-20deg); }
+        to { transform: translateX(200%) skewX(-20deg); }
+      }
     </style>
   <script type="importmap">
 {
@@ -78,26 +149,6 @@ import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
 
 // === FROM types.ts ===
 // Interfaces and Enums are defined here directly
-interface NotePosition {
-  note: string;
-  string: number;
-  fret: number;
-}
-
-interface YoutubeTrack {
-    videoId: string;
-    title: string;
-    url: string;
-}
-
-interface GamificationData {
-  xp: number;
-  level: number;
-  timePlayed: number; // in seconds
-  firstName?: string;
-  recentTracks?: YoutubeTrack[];
-}
-
 const PlayerState = {
   Stopped: 'Stopped',
   CountingDown: 'CountingDown',
@@ -223,11 +274,6 @@ const notePositions = calculateNotePositions();
 
 const GuitarNeck = ({ highlightedNotes }) => {
   const neckRef = React.useRef(null);
-  const [isMounted, setIsMounted] = useState(false);
-
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
 
   const neckDimensions = {
     height: 140,
@@ -616,58 +662,49 @@ const YoutubePlayer = ({ onPlaybackChange, onTrackLoaded, recentTracks = [] }) =
     );
 };
 
-const CircleProgress = ({ progress, size, strokeWidth, level }) => {
-    const center = size / 2;
-    const radius = center - strokeWidth / 2;
-    const circumference = 2 * Math.PI * radius;
-    const offset = circumference - (progress / 100) * circumference;
+const HeaderGamificationStats = ({ data }) => {
+    if (!data) return null;
+    const xp = data.xp ?? 0;
+    const level = data.level ?? 1;
+    const timePlayed = data.timePlayed ?? 0;
+    const levelProgress = GAMIFICATION_XP_PER_LEVEL > 0 ? (xp / GAMIFICATION_XP_PER_LEVEL) * 100 : 0;
+    const timePlayedFormatted = `${String(Math.floor(timePlayed / 60)).padStart(2, '0')}:${String(timePlayed % 60).padStart(2, '0')}`;
 
     return (
-        <div className="relative" style={{ width: size, height: size }}>
-            <svg width={size} height={size} className="-rotate-90">
-                <circle stroke="#374151" fill="transparent" strokeWidth={strokeWidth} r={radius} cx={center} cy={center} />
-                <circle
-                    stroke="#facc15"
-                    fill="transparent"
-                    strokeWidth={strokeWidth}
-                    strokeDasharray={circumference}
-                    strokeDashoffset={offset}
-                    r={radius}
-                    cx={center}
-                    cy={center}
-                    strokeLinecap="round"
-                    className="transition-all duration-300 ease-linear"
-                />
-            </svg>
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className="text-xs font-semibold text-yellow-500">LVL</span>
-                <span className="text-xl font-bold text-white">{level}</span>
-            </div>
-        </div>
-    );
-};
-
-const GamificationDashboard = ({ data }) => {
-    const levelProgress = (data.xp / GAMIFICATION_XP_PER_LEVEL) * 100;
-    return (
-        <div className="fixed bottom-0 left-0 right-0 bg-gray-950/80 backdrop-blur-sm border-t border-gray-800 p-3 z-30">
-            <div className="w-full max-w-7xl mx-auto flex items-center justify-between gap-4 text-sm sm:justify-around">
-                <div className="flex items-center gap-4">
-                     <CircleProgress progress={levelProgress} size={50} strokeWidth={5} level={data.level} />
-                     <div className="flex flex-col">
-                        <span className="font-bold text-lg text-white">Niveau {data.level}</span>
-                        <span className="text-xs text-gray-400">{data.xp} / {GAMIFICATION_XP_PER_LEVEL} XP</span>
-                     </div>
+        <div className="flex-grow flex items-center justify-center sm:justify-start" style={{minWidth: '320px'}}>
+            <div className="hud-container relative w-full max-w-sm p-1">
+                {/* Level Badge - Hexagonal */}
+                <div className="hud-level-badge absolute -left-4 top-1/2 -translate-y-1/2 w-16 h-16 flex items-center justify-center">
+                    <div className="relative w-full h-full flex flex-col items-center justify-center text-center">
+                         <span className="text-xs font-bold text-purple-300 -mb-1 leading-none">LVL</span>
+                         <span className="text-3xl font-black text-white tracking-tighter leading-none text-shadow-heavy">{level}</span>
+                    </div>
                 </div>
-                <div className="flex flex-col items-center gap-1 text-cyan-400">
-                     <ClockIcon className="w-6 h-6"/>
-                     <span className="font-semibold text-sm">{Math.floor(data.timePlayed / 60)}m {data.timePlayed % 60}s</span>
-                     <span className="text-xs text-gray-400">Temps de jeu</span>
+
+                {/* Main Stats Panel */}
+                <div className="pl-10 pr-2 py-1.5 w-full">
+                    {/* XP Bar */}
+                    <div className="relative w-full h-6 hud-xp-container">
+                         <div
+                            className="h-full hud-xp-bar transition-all duration-500 ease-out"
+                            style={{ width: `${levelProgress}%` }}
+                         ></div>
+                         <div className="absolute inset-0 flex items-center justify-center">
+                            <span className="text-sm font-bold text-white text-shadow-heavy tracking-wider">{xp} / {GAMIFICATION_XP_PER_LEVEL}</span>
+                        </div>
+                    </div>
+                    
+                    {/* Time Played */}
+                    <div className="absolute bottom-[-14px] right-2 flex items-center gap-1.5 hud-time-container px-2 py-0.5">
+                        <ClockIcon className="w-3 h-3 text-cyan-300"/>
+                        <span className="font-mono text-xs font-semibold text-cyan-300 tracking-wider">{timePlayedFormatted}</span>
+                    </div>
                 </div>
             </div>
         </div>
     );
 };
+
 
 const SaveStatusIndicator = ({ status }) => {
     const statusMap = {
@@ -704,6 +741,9 @@ const getRootNote = (chord) => {
     return match ? match[0] : null;
 };
 
+const dbToSlider = (db) => (db + 40) * 2.5;
+const sliderToDb = (slider) => (slider * 0.4) - 40;
+
 function App() {
     const [chords, setChords] = useState(Array(TOTAL_CELLS).fill(''));
     
@@ -721,9 +761,10 @@ function App() {
     const [saveStatus, setSaveStatus] = useState('idle');
     
     const [currentTrack, setCurrentTrack] = useState(null);
+    const [isAudioReady, setIsAudioReady] = useState(false);
     
     const isSavingRef = useRef(false);
-    const synths = useRef({}).current;
+    const synths = useRef({});
     const transportPart = useRef(null);
     const countdownPart = useRef(null);
     
@@ -762,15 +803,16 @@ function App() {
                 const userDoc = await getDoc(userDocRef);
                 if (userDoc.exists()) {
                     const data = userDoc.data();
-                    if (!data.recentTracks) data.recentTracks = [];
-                    updateGamificationData(data);
+                    // FIX: Merge loaded data with initial data to prevent NaN errors from incomplete profiles.
+                    const mergedData = { ...INITIAL_GAMIFICATION_DATA, ...data };
+                    updateGamificationData(() => mergedData);
                 } else {
                     await setDoc(doc(db, "users", user.uid), INITIAL_GAMIFICATION_DATA);
-                    updateGamificationData(INITIAL_GAMIFICATION_DATA);
+                    updateGamificationData(() => INITIAL_GAMIFICATION_DATA);
                 }
             } else {
                 setCurrentUser(null);
-                updateGamificationData(INITIAL_GAMIFICATION_DATA);
+                updateGamificationData(() => INITIAL_GAMIFICATION_DATA);
             }
         });
         return () => unsubscribe();
@@ -798,25 +840,37 @@ function App() {
         setChords(newChords);
     };
 
+    const handleVolumeChange = (instrument, value) => {
+        setVolumes(prev => ({
+            ...prev,
+            [instrument]: sliderToDb(Number(value))
+        }));
+    };
+
     useEffect(() => {
-        synths.bass = new MonoSynth().toDestination();
-        synths.bass.set({ oscillator: { type: 'fatsawtooth' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.5 } });
-        synths.chord = new PolySynth(Synth).toDestination();
-        synths.chord.set({ oscillator: { type: "fatsawtooth", count: 3, spread: 30 }, envelope: { attack: 0.4, decay: 0.1, sustain: 0.8, release: 1.5 } });
-        synths.metro = new MembraneSynth().toDestination();
-        synths.metro.set({ pitchDecay: 0.01, octaves: 4, oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.1, sustain: 0.01, release: 0.1 } });
+        setIsAudioReady(false);
+        synths.current.bass = new MonoSynth().toDestination();
+        synths.current.bass.set({ oscillator: { type: 'fatsawtooth' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.5 } });
+        synths.current.chord = new PolySynth(Synth).toDestination();
+        synths.current.chord.set({ oscillator: { type: "fatsawtooth", count: 3, spread: 30 }, envelope: { attack: 0.4, decay: 0.1, sustain: 0.8, release: 1.5 } });
+        synths.current.metro = new MembraneSynth().toDestination();
+        synths.current.metro.set({ pitchDecay: 0.01, octaves: 4, oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.1, sustain: 0.01, release: 0.1 } });
+        setIsAudioReady(true);
         return () => {
-            Object.values(synths).forEach(synth => synth?.dispose());
+            setIsAudioReady(false);
+            synths.current.bass?.dispose();
+            synths.current.chord?.dispose();
+            synths.current.metro?.dispose();
             Transport.cancel(0);
         };
     }, []);
 
     useEffect(() => {
         Transport.bpm.value = tempo;
-        if(synths.metro) synths.metro.volume.value = volumes.metro;
-        if(synths.bass) synths.bass.volume.value = volumes.bass;
-        if(synths.chord) synths.chord.volume.value = volumes.chord;
-    }, [tempo, volumes, synths]);
+        if(synths.current.metro) synths.current.metro.volume.value = volumes.metro;
+        if(synths.current.bass) synths.current.bass.volume.value = volumes.bass;
+        if(synths.current.chord) synths.current.chord.volume.value = volumes.chord;
+    }, [tempo, volumes]);
 
     useEffect(() => {
         let timer;
@@ -842,11 +896,11 @@ function App() {
         Transport.cancel(0);
         transportPart.current?.dispose();
         countdownPart.current?.dispose();
-        synths.bass?.triggerRelease(context.currentTime);
-        synths.chord?.releaseAll(context.currentTime);
+        synths.current.bass?.triggerRelease(context.currentTime);
+        synths.current.chord?.releaseAll(context.currentTime);
         setPlayerState(PlayerState.Stopped);
         setCurrentBeat(-1);
-    }, [synths]);
+    }, []);
 
     const startPlayback = useCallback(() => {
         const activeChords = chords.map((c, i) => ({ chord: c, index: i })).filter(item => item.chord.trim() !== '');
@@ -879,14 +933,14 @@ function App() {
         }
         transportPart.current = new Part((time, value) => {
             if (value.type === 'highlight') Draw.schedule(() => setCurrentBeat(value.beat), time);
-            else if (value.type === 'metro') synths.metro?.triggerAttackRelease(value.note, '16n', time);
-            else if (value.type === 'bass') synths.bass?.triggerAttackRelease(value.note, value.duration, time);
-            else if (value.type === 'chord') synths.chord?.triggerAttackRelease(value.notes, value.duration, time);
+            else if (value.type === 'metro') synths.current.metro?.triggerAttackRelease(value.note, '16n', time);
+            else if (value.type === 'bass') synths.current.bass?.triggerAttackRelease(value.note, value.duration, time);
+            else if (value.type === 'chord' && synths.current.chord) synths.current.chord.triggerAttackRelease(value.notes, value.duration, time);
         }, events).start('1m');
         transportPart.current.loop = true;
         transportPart.current.loopEnd = `${loopEndMeasures}m`;
         countdownPart.current = new Part((time, value) => {
-             synths.metro?.triggerAttackRelease('C5', '8n', time);
+             synths.current.metro?.triggerAttackRelease('C5', '8n', time);
              Draw.schedule(() => setCurrentBeat(value.beat), time);
         }, [{time: '0:0', beat: -4}, {time: '0:1', beat: -3}, {time: '0:2', beat: -2}, {time: '0:3', beat: -1}]).start(0);
         Transport.loop = true;
@@ -895,7 +949,7 @@ function App() {
         Transport.scheduleOnce(() => setPlayerState(PlayerState.Playing), '1m');
         Transport.start();
         setPlayerState(PlayerState.CountingDown);
-    }, [chords, synths]);
+    }, [chords]);
 
     const handlePlayStop = async () => {
         if (context.state !== 'running') await start();
@@ -932,7 +986,7 @@ function App() {
         if (!currentChord) return [];
 
         const currentRoot = getRootNote(currentChord);
-        return currentRoot ? [{ note: currentRoot, color: '#a855f7', isBlinking: true }] : [];
+        return currentRoot ? [{ note: currentRoot, color: '#a855f7', isBlinking: true, label: currentRoot }] : [];
     }, [playerState, currentBeat, chords]);
     
     const handleYoutubePlaybackChange = (isPlaying) => setIsYoutubePlaying(isPlaying);
@@ -974,37 +1028,44 @@ function App() {
 
     return (
         <>
-            <div className="min-h-screen p-2 sm:p-4 pb-40">
+            <div className="bg-gray-900 border-b border-gray-800 sticky top-0 z-10">
+                <div className="w-full max-w-7xl mx-auto px-2 sm:px-4 py-2 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+                    {currentUser ? (
+                        <>
+                            <HeaderGamificationStats data={gamificationData} />
+                            <div className="flex-shrink-0 flex items-center gap-4">
+                                <SaveStatusIndicator status={saveStatus} />
+                                <div className="text-right">
+                                    {gamificationData.firstName ? (
+                                        <p className="font-semibold text-gray-100 text-sm hidden sm:block">{getGreeting()}, {gamificationData.firstName}!</p>
+                                    ) : (
+                                        <p className="text-sm text-gray-300 truncate hidden sm:block">{currentUser.email}</p>
+                                    )}
+                                    <button onClick={handleLogout} className="text-xs text-red-400 hover:underline">Déconnexion</button>
+                                </div>
+                                <UserIcon className="w-8 h-8 text-gray-400"/>
+                            </div>
+                        </>
+                    ) : (
+                        <div className="w-full flex justify-end">
+                            <button onClick={() => setIsAuthModalOpen(true)} className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-gray-300 font-semibold py-2 px-4 rounded-lg transition">
+                                <UserIcon className="w-5 h-5"/>
+                                <span className="hidden sm:inline">Connexion / Inscription</span>
+                                <span className="sm:hidden">Connexion</span>
+                            </button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <div className="min-h-screen p-2 sm:p-4 pb-8">
                 <div className="w-full max-w-7xl mx-auto flex flex-col gap-4">
-                    <header className="flex justify-between items-center py-4">
+                    <header className="py-4">
                         <div className="text-left">
                             <h1 className="text-3xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-blue-500 mb-1">
                                 🎸 GIA Navigator
                             </h1>
                             <p className="text-md text-gray-400">Votre plan d'action visuel pour l'improvisation.</p>
-                        </div>
-                         <div className="flex items-center gap-4">
-                            {currentUser ? (
-                                <>
-                                    <div className="flex items-center gap-2">
-                                        <SaveStatusIndicator status={saveStatus} />
-                                        <div className="text-right">
-                                            {gamificationData.firstName ? (
-                                                <p className="font-semibold text-gray-100">{getGreeting()}, {gamificationData.firstName}!</p>
-                                            ) : (
-                                                <p className="text-sm text-gray-300 truncate">{currentUser.email}</p>
-                                            )}
-                                            <button onClick={handleLogout} className="text-xs text-red-400 hover:underline">Déconnexion</button>
-                                        </div>
-                                    </div>
-                                    <UserIcon className="w-8 h-8 text-gray-400"/>
-                                </>
-                            ) : (
-                                <button onClick={() => setIsAuthModalOpen(true)} className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-gray-300 font-semibold py-2 px-4 rounded-lg transition">
-                                    <UserIcon className="w-5 h-5"/>
-                                    <span>Connexion / Inscription</span>
-                                </button>
-                            )}
                         </div>
                     </header>
 
@@ -1048,26 +1109,42 @@ function App() {
                             <GuitarNeck highlightedNotes={getHighlightedNotes()} />
                             
                             <div className="mt-4 flex flex-col md:flex-row items-center justify-between gap-4 p-3 bg-gray-900 rounded-lg">
-                                <button onClick={handlePlayStop} disabled={playerState === PlayerState.CountingDown} className="w-full md:w-auto flex items-center justify-center gap-3 px-6 py-3 font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-500 transition-all duration-200 disabled:bg-gray-500 disabled:cursor-wait">
+                                <button onClick={handlePlayStop} disabled={!isAudioReady || playerState === PlayerState.CountingDown} className="w-full md:w-auto flex items-center justify-center gap-3 px-6 py-3 font-bold text-white bg-emerald-600 rounded-lg hover:bg-emerald-500 transition-all duration-200 disabled:bg-gray-500 disabled:cursor-wait">
                                     {playerState === PlayerState.Stopped && <PlayIcon className="w-6 h-6" />}
                                     {playerState !== PlayerState.Stopped && <StopIcon className="w-6 h-6" />}
                                     <span>{
+                                        !isAudioReady ? 'Chargement audio...' :
                                         playerState === PlayerState.Stopped ? 'Play' :
                                         playerState === PlayerState.CountingDown ? `Décompte ${4 - (currentBeat * -1 - 1)}` :
                                         'Stop'
                                     }</span>
                                 </button>
-                                <div className="w-full md:w-auto flex items-center gap-3">
-                                    <label htmlFor="tempo" className="font-semibold text-gray-300">Tempo:</label>
-                                    <input type="range" id="tempo" min="40" max="200" value={tempo} onChange={e => setTempo(Number(e.target.value))} className="w-full"/>
-                                    <span className="w-16 text-center font-bold">{tempo} bpm</span>
+                                <div className="w-full flex-1 flex flex-col sm:flex-row items-center gap-4">
+                                    <div className="w-full flex items-center gap-3">
+                                        <label htmlFor="tempo" className="font-semibold text-gray-300 whitespace-nowrap">Tempo:</label>
+                                        <input type="range" id="tempo" min="40" max="200" value={tempo} onChange={e => setTempo(Number(e.target.value))} className="w-full accent-purple-500"/>
+                                        <span className="w-16 text-center font-bold">{tempo} bpm</span>
+                                    </div>
+                                    <div className="w-full sm:max-w-xs flex items-center gap-4 border-t sm:border-t-0 sm:border-l border-gray-700 pt-4 sm:pt-0 sm:pl-4">
+                                        <div className="flex flex-col items-center gap-1 w-1/3 text-center">
+                                            <label htmlFor="metro-vol" className="text-xs font-semibold text-gray-400">Métronome</label>
+                                            <input type="range" id="metro-vol" min="0" max="100" value={dbToSlider(volumes.metro)} onChange={e => handleVolumeChange('metro', e.target.value)} className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer range-sm accent-purple-500"/>
+                                        </div>
+                                        <div className="flex flex-col items-center gap-1 w-1/3 text-center">
+                                            <label htmlFor="bass-vol" className="text-xs font-semibold text-gray-400">Basse</label>
+                                            <input type="range" id="bass-vol" min="0" max="100" value={dbToSlider(volumes.bass)} onChange={e => handleVolumeChange('bass', e.target.value)} className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer range-sm accent-purple-500"/>
+                                        </div>
+                                        <div className="flex flex-col items-center gap-1 w-1/3 text-center">
+                                            <label htmlFor="chord-vol" className="text-xs font-semibold text-gray-400">Accords</label>
+                                            <input type="range" id="chord-vol" min="0" max="100" value={dbToSlider(volumes.chord)} onChange={e => handleVolumeChange('chord', e.target.value)} className="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer range-sm accent-purple-500"/>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </section>
                     </main>
                 </div>
             </div>
-            <GamificationDashboard data={gamificationData} />
             <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} initialGamificationData={gamificationDataRef.current} />
         </>
     );
